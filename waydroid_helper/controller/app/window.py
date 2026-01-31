@@ -743,7 +743,6 @@ class TransparentWindow(Adw.Window):
         self.active_mask_layer.set_opacity(0.0)
 
     def _on_close_request(self, window):
-        self.menu_manager.save_current_profile()
         async def close():
             await self.close_server()
             await self.cleanup_scrcpy()
@@ -1739,7 +1738,6 @@ class KeyMapper(Adw.Application):
 
     async def _do_shutdown(self) -> None:
         if self.window:
-            self.window.menu_manager.save_current_profile()
             self.window.on_clear_widgets(None)
             await self.window.close_server()
             await self.window.cleanup_scrcpy()

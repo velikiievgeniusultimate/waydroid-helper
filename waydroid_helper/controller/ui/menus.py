@@ -257,7 +257,7 @@ class ContextMenuManager:
     def _get_profiles_dir(self) -> str:
         """获取默认的配置文件目录"""
         config_dir = os.getenv("XDG_CONFIG_HOME", GLib.get_user_config_dir())
-        profiles_dir = os.path.join(config_dir, "waydroid-helper", "profiles")
+        profiles_dir = os.path.join(config_dir, "waydroid-helper", "Profiles")
         os.makedirs(profiles_dir, exist_ok=True)
         return profiles_dir
 
@@ -279,22 +279,7 @@ class ContextMenuManager:
             logger.error(f"Failed to save profile state: {e}")
 
     def _load_current_profile(self) -> str:
-        state_path = self._current_profile_state_path()
-        if state_path.exists():
-            try:
-                with open(state_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                profile = data.get("current_profile")
-                if isinstance(profile, str) and profile.strip():
-                    return profile
-            except Exception as e:
-                logger.error(f"Failed to read profile state: {e}")
-
-        profile = self._config_manager.get_value(
-            self._profile_config_key(), self.DEFAULT_PROFILE_NAME
-        )
-        if not isinstance(profile, str) or not profile.strip():
-            profile = self.DEFAULT_PROFILE_NAME
+        profile = self.DEFAULT_PROFILE_NAME
         self._write_current_profile_state(profile)
         return profile
 
@@ -544,8 +529,6 @@ class ContextMenuManager:
         if normalized == self._current_profile:
             self.parent_window.show_notification(_("Profile already selected"))
             return
-
-        self.save_current_profile()
         profile_path = self._profile_path(normalized)
         if profile_path.exists():
             self._load_layout_from_path(str(profile_path), widget_factory)
