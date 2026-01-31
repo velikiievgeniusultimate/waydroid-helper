@@ -96,14 +96,17 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         super().__init__()
         self.widgets: set[object] = set()
         self.active_widget: object | None = None
+        self.tuning_widget: object | None = None
         self.cursor_position: tuple[int, int] | None = None
+        self.mapping_mode: bool = False
         self.set_draw_func(self._draw_overlay, None)
         self.set_can_target(False)
         self.set_visible(False)
 
     def register_widget(self, widget: object) -> None:
         self.widgets.add(widget)
-        self.set_visible(True)
+        if self.mapping_mode:
+            self.set_visible(True)
         self.queue_draw()
 
     def unregister_widget(self, widget: object) -> None:
@@ -111,20 +114,72 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.widgets.remove(widget)
         if self.active_widget is widget:
             self.active_widget = None
+        if self.tuning_widget is widget:
+            self.tuning_widget = None
         if not self.widgets:
             self.set_visible(False)
         self.queue_draw()
 
     def set_active_widget(self, widget: object | None) -> None:
+        if not self.mapping_mode:
+            self.active_widget = None
+            self.queue_draw()
+            return
         self.active_widget = widget
         if widget is not None:
             self.register_widget(widget)
+        self.queue_draw()
+
+    def set_tuning_widget(self, widget: object | None) -> None:
+        if not self.mapping_mode:
+            self.tuning_widget = None
+            self.queue_draw()
+            return
+        self.tuning_widget = widget
+        if widget is not None:
+            self.register_widget(widget)
+        self.queue_draw()
+
+    def set_mapping_mode(self, mapping_mode: bool) -> None:
+        if self.mapping_mode == mapping_mode:
+            return
+        self.mapping_mode = mapping_mode
+        if not mapping_mode:
+            for widget in list(self.widgets):
+                cancel = getattr(widget, "cancel_calibration", None)
+                if callable(cancel):
+                    cancel()
+                cancel_tuning = getattr(widget, "cancel_tuning", None)
+                if callable(cancel_tuning):
+                    cancel_tuning()
+            self.active_widget = None
+            self.tuning_widget = None
+            self.cursor_position = None
+            self.set_visible(False)
+        else:
+            self.set_visible(bool(self.widgets))
         self.queue_draw()
 
     def update_cursor(self, position: tuple[int, int]) -> None:
         self.cursor_position = position
         if self.get_visible():
             self.queue_draw()
+
+    def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
+        if not self.mapping_mode or self.tuning_widget is None:
+            return False
+        handler = getattr(self.tuning_widget, "handle_tuning_key", None)
+        if callable(handler):
+            return bool(handler(keyval, state))
+        return False
+
+    @property
+    def is_tuning_active(self) -> bool:
+        return (
+            self.mapping_mode
+            and self.tuning_widget is not None
+            and bool(getattr(self.tuning_widget, "is_tuning", False))
+        )
 
     def _draw_crosshair(self, cr, x: float, y: float) -> None:
         cr.set_source_rgba(0.2, 0.8, 1.0, 0.9)
@@ -141,14 +196,19 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         cr.stroke()
 
     def _draw_overlay(self, widget, cr, width, height, user_data):
-        if not self.widgets:
+        if not self.widgets or not self.mapping_mode:
             return
 
         is_calibrating = False
         if self.active_widget is not None:
             is_calibrating = bool(getattr(self.active_widget, "is_calibrating", False))
 
-        if is_calibrating:
+        tuning_active = False
+        tuning_widget = self.tuning_widget
+        if tuning_widget is not None:
+            tuning_active = bool(getattr(tuning_widget, "is_tuning", False))
+
+        if is_calibrating or tuning_active:
             cr.set_source_rgba(0, 0, 0, 0.45)
             cr.rectangle(0, 0, width, height)
             cr.fill()
@@ -162,43 +222,97 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                 continue
             self._draw_crosshair(cr, center[0], center[1])
 
-        if not (self.active_widget and is_calibrating):
+        if not (self.active_widget and is_calibrating) and not tuning_active:
             return
 
-        if self.cursor_position is not None:
+        if is_calibrating and self.cursor_position is not None:
             cursor_x, cursor_y = self.cursor_position
             cr.set_source_rgba(1.0, 0.7, 0.2, 0.9)
             cr.arc(cursor_x, cursor_y, 6, 0, 2 * math.pi)
             cr.stroke()
 
-        cursor_text = "Cursor: -,-"
-        if self.cursor_position is not None:
             cursor_text = f"Cursor: {self.cursor_position[0]}, {self.cursor_position[1]}"
 
-        get_effective_center = getattr(self.active_widget, "get_effective_center", None)
-        center_text = "Center: -,-"
-        center = None
-        if callable(get_effective_center):
-            center = get_effective_center()
-            if center is not None:
-                center_text = f"Center: {int(center[0])}, {int(center[1])}"
+            get_effective_center = getattr(self.active_widget, "get_effective_center", None)
+            center_text = "Center: -,-"
+            center = None
+            if callable(get_effective_center):
+                center = get_effective_center()
+                if center is not None:
+                    center_text = f"Center: {int(center[0])}, {int(center[1])}"
 
-        get_stored_center = getattr(self.active_widget, "get_calibrated_center", None)
-        stored_center = get_stored_center() if callable(get_stored_center) else None
-        if stored_center is None and center is not None:
-            center_text = f"Center (default): {int(center[0])}, {int(center[1])}"
-        elif stored_center is not None:
-            center_text = f"Center (stored): {int(center[0])}, {int(center[1])}"
+            get_stored_center = getattr(self.active_widget, "get_calibrated_center", None)
+            stored_center = get_stored_center() if callable(get_stored_center) else None
+            if stored_center is None and center is not None:
+                center_text = f"Center (default): {int(center[0])}, {int(center[1])}"
+            elif stored_center is not None:
+                center_text = f"Center (stored): {int(center[0])}, {int(center[1])}"
 
-        cr.set_source_rgba(1, 1, 1, 0.95)
-        cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
-        cr.set_font_size(14)
-        margin = 16
-        line_height = 18
-        cr.move_to(margin, margin + line_height)
-        cr.show_text(cursor_text)
-        cr.move_to(margin, margin + line_height * 2)
-        cr.show_text(center_text)
+            cr.set_source_rgba(1, 1, 1, 0.95)
+            cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
+            cr.set_font_size(14)
+            margin = 16
+            line_height = 18
+            cr.move_to(margin, margin + line_height)
+            cr.show_text(cursor_text)
+            cr.move_to(margin, margin + line_height * 2)
+            cr.show_text(center_text)
+
+        if tuning_active and tuning_widget is not None:
+            tuning_data = getattr(tuning_widget, "get_tuning_overlay_data", None)
+            data = tuning_data(self.cursor_position) if callable(tuning_data) else {}
+            x_gain = data.get("x_gain", 1.0)
+            y_gain = data.get("y_gain", 1.0)
+            raw_angle = data.get("raw_angle")
+            corrected_angle = data.get("corrected_angle")
+            raw_vector = data.get("raw_vector")
+            corrected_vector = data.get("corrected_vector")
+            center = data.get("center")
+
+            if center and raw_vector and corrected_vector:
+                center_x, center_y = center
+                raw_dx, raw_dy = raw_vector
+                corrected_dx, corrected_dy = corrected_vector
+                raw_len = math.hypot(raw_dx, raw_dy)
+                corrected_len = math.hypot(corrected_dx, corrected_dy)
+                line_length = 60
+                if raw_len > 0:
+                    cr.set_source_rgba(0.9, 0.5, 0.2, 0.9)
+                    cr.set_line_width(2)
+                    cr.move_to(center_x, center_y)
+                    cr.line_to(
+                        center_x + raw_dx / raw_len * line_length,
+                        center_y + raw_dy / raw_len * line_length,
+                    )
+                    cr.stroke()
+                if corrected_len > 0:
+                    cr.set_source_rgba(0.2, 0.8, 1.0, 0.9)
+                    cr.set_line_width(2)
+                    cr.move_to(center_x, center_y)
+                    cr.line_to(
+                        center_x + corrected_dx / corrected_len * line_length,
+                        center_y + corrected_dy / corrected_len * line_length,
+                    )
+                    cr.stroke()
+
+            raw_angle_text = "--"
+            corrected_angle_text = "--"
+            if raw_angle is not None:
+                raw_angle_text = f"{raw_angle:.1f}°"
+            if corrected_angle is not None:
+                corrected_angle_text = f"{corrected_angle:.1f}°"
+
+            cr.set_source_rgba(1, 1, 1, 0.95)
+            cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
+            cr.set_font_size(14)
+            margin = 16
+            line_height = 18
+            cr.move_to(margin, margin + line_height)
+            cr.show_text(f"Raw angle: {raw_angle_text}")
+            cr.move_to(margin, margin + line_height * 2)
+            cr.show_text(f"Corrected angle: {corrected_angle_text}")
+            cr.move_to(margin, margin + line_height * 3)
+            cr.show_text(f"X Gain: {x_gain:.2f}  Y Gain: {y_gain:.2f}")
 
 
 class TransparentWindow(Adw.Window):
@@ -572,6 +686,13 @@ class TransparentWindow(Adw.Window):
             self._set_settings_panel_visible(True, widget)
             self._set_mask_dimmed(False)
             return
+        if action == "tune_start":
+            self.right_click_overlay.set_tuning_widget(widget)
+            return
+        if action == "tune_stop":
+            if self.right_click_overlay.tuning_widget is widget:
+                self.right_click_overlay.set_tuning_widget(None)
+            return
         if action == "refresh":
             self.right_click_overlay.queue_draw()
 
@@ -817,6 +938,8 @@ class TransparentWindow(Adw.Window):
             self.right_click_overlay.active_widget is not None
             and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
         ):
+            self.right_click_overlay.update_cursor((int(x), int(y)))
+        elif self.right_click_overlay.is_tuning_active:
             self.right_click_overlay.update_cursor((int(x), int(y)))
 
         if self.current_mode == self.MAPPING_MODE:
@@ -1217,6 +1340,8 @@ class TransparentWindow(Adw.Window):
 
     def on_global_key_press(self, controller, keyval, keycode, state):
         """Global keyboard event - supports dual mode, uses event handler chain"""
+        if self.right_click_overlay.handle_tuning_key(keyval, state):
+            return True
         if (
             keyval == Gdk.KEY_Escape
             and self.right_click_overlay.active_widget is not None
@@ -1373,6 +1498,7 @@ class TransparentWindow(Adw.Window):
         # Notify all widgets to switch drawing mode
         mapping_mode = new_mode == self.MAPPING_MODE
         self.set_all_widgets_mapping_mode(mapping_mode)
+        self.right_click_overlay.set_mapping_mode(mapping_mode)
 
         # Adjust UI state based on new mode
         if new_mode == self.MAPPING_MODE:

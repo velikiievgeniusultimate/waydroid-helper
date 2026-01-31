@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from cairo import Context, Surface
     from gi.repository import Gtk
 
-from gi.repository import GLib
+from gi.repository import GLib, Gdk
 
 from waydroid_helper.controller.android.input import (AMotionEventAction,
                                                       AMotionEventButtons)
@@ -49,6 +49,15 @@ class RightClickToWalk(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "calibrate_center"
     RESET_CENTER_CONFIG_KEY = "reset_center"
     APPLY_CENTER_CONFIG_KEY = "apply_center"
+    X_GAIN_CONFIG_KEY = "x_gain"
+    Y_GAIN_CONFIG_KEY = "y_gain"
+    X_GAIN_INPUT_CONFIG_KEY = "x_gain_input"
+    Y_GAIN_INPUT_CONFIG_KEY = "y_gain_input"
+    APPLY_GAIN_CONFIG_KEY = "apply_gains"
+    TUNE_ANGLE_CONFIG_KEY = "tune_angle"
+    GAIN_DEFAULT = 1.0
+    GAIN_MIN = 0.5
+    GAIN_MAX = 2.0
 
     def __init__(
         self,
@@ -115,6 +124,10 @@ class RightClickToWalk(BaseWidget):
 
         self.screen_info = ScreenInfo()
         self._calibration_mode: bool = False
+        self._tuning_mode: bool = False
+        self._tuning_x_gain: float | None = None
+        self._tuning_y_gain: float | None = None
+        self._locked_target_position: tuple[float, float] | None = None
 
         self.setup_config()
         self.event_bus.subscribe(
@@ -509,6 +522,9 @@ class RightClickToWalk(BaseWidget):
         """重置摇杆状态"""
         self._joystick_state = JoystickState.INACTIVE
         self._current_position = (self.center_x, self.center_y)
+        self._locked_target_position = None
+        self._key_is_currently_pressed = False
+        self._is_long_press = False
         
         # 清理定时器
         if self._move_timer:
@@ -568,6 +584,9 @@ class RightClickToWalk(BaseWidget):
         """计算目标位置（圆边界上的交点）"""
         dx = x1 - x0
         dy = y1 - y0
+        x_gain, y_gain = self._get_gains()
+        dx *= x_gain
+        dy *= y_gain
         length = math.hypot(dx, dy)
         if length == 0:
             return (cx, cy)  # 如果没有方向，返回中心点
@@ -591,33 +610,48 @@ class RightClickToWalk(BaseWidget):
             return False
 
         current_time = time.time()
-        
+
         # 获取鼠标位置和窗口信息
         mouse_x, mouse_y = event.position
         window_center_x, window_center_y = self._get_window_center()
-        
-        # 计算鼠标距离窗口中心的距离
-        self._mouse_distance_from_center = math.hypot(
-            mouse_x - window_center_x, 
-            mouse_y - window_center_y
-        )
-        
-        # 计算目标位置
-        widget_radius = self.width / 2
-        self._target_position = self._get_target_position(
-            self.center_x,
-            self.center_y,
-            widget_radius,
-            window_center_x,
-            window_center_y,
-            mouse_x,
-            mouse_y,
-        )
 
-        # 判断是点击事件还是移动事件
         is_click_event = event.event_type == "mouse_press"
         is_motion_event = event.event_type == "mouse_motion"
-        
+
+        if is_click_event:
+            # 计算鼠标距离窗口中心的距离
+            self._mouse_distance_from_center = math.hypot(
+                mouse_x - window_center_x,
+                mouse_y - window_center_y,
+            )
+            # 计算目标位置（锁定方向）
+            widget_radius = self.width / 2
+            self._locked_target_position = self._get_target_position(
+                self.center_x,
+                self.center_y,
+                widget_radius,
+                window_center_x,
+                window_center_y,
+                mouse_x,
+                mouse_y,
+            )
+            self._target_position = self._locked_target_position
+        elif is_motion_event:
+            if self._should_follow_cursor(current_time):
+                widget_radius = self.width / 2
+                self._target_position = self._get_target_position(
+                    self.center_x,
+                    self.center_y,
+                    widget_radius,
+                    window_center_x,
+                    window_center_y,
+                    mouse_x,
+                    mouse_y,
+                )
+                self._locked_target_position = None
+            elif self._locked_target_position is not None:
+                self._target_position = self._locked_target_position
+
         if self._joystick_state == JoystickState.INACTIVE:
             # 首次激活 - 只有点击事件才能激活
             if is_click_event:
@@ -646,6 +680,7 @@ class RightClickToWalk(BaseWidget):
                 # 移动中收到新点击，重置触发时间和长按状态
                 self._key_press_start_time = current_time
                 self._is_long_press = False
+                self._key_is_currently_pressed = True
             elif is_motion_event:
                 # 移动事件只更新目标位置，不重置计时
                 pass
@@ -692,6 +727,16 @@ class RightClickToWalk(BaseWidget):
                 self._start_hold_timer()
 
         return True
+
+    def _should_follow_cursor(self, current_time: float) -> bool:
+        if not self._key_is_currently_pressed:
+            return False
+        if self._is_long_press:
+            return True
+        if current_time - self._key_press_start_time >= self._long_press_threshold:
+            self._is_long_press = True
+            return True
+        return False
 
     def setup_config(self) -> None:
         """设置右键行走的配置项"""
@@ -755,6 +800,56 @@ class RightClickToWalk(BaseWidget):
                 "Controller Widgets", "Apply the manual center coordinates."
             ),
         )
+        x_gain_config = create_text_config(
+            key=self.X_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "X Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Persisted X gain for ellipse correction."
+            ),
+            visible=False,
+        )
+        y_gain_config = create_text_config(
+            key=self.Y_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Y Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Persisted Y gain for ellipse correction."
+            ),
+            visible=False,
+        )
+        x_gain_input_config = create_text_config(
+            key=self.X_GAIN_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "X Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Ellipse correction gain for X axis (0.5–2.0)."
+            ),
+        )
+        y_gain_input_config = create_text_config(
+            key=self.Y_GAIN_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Y Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Ellipse correction gain for Y axis (0.5–2.0)."
+            ),
+        )
+        apply_gain_config = create_action_config(
+            key=self.APPLY_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Gains"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Validate and apply ellipse correction gains."
+            ),
+        )
+        tune_angle_config = create_action_config(
+            key=self.TUNE_ANGLE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Tune Angle"),
+            button_label=pgettext("Controller Widgets", "Tune"),
+            description=pgettext(
+                "Controller Widgets", "Live tuning overlay for ellipse correction."
+            ),
+        )
 
         self.add_config_item(calibrate_center_config)
         self.add_config_item(reset_center_config)
@@ -763,6 +858,12 @@ class RightClickToWalk(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(apply_center_config)
+        self.add_config_item(x_gain_config)
+        self.add_config_item(y_gain_config)
+        self.add_config_item(x_gain_input_config)
+        self.add_config_item(y_gain_input_config)
+        self.add_config_item(apply_gain_config)
+        self.add_config_item(tune_angle_config)
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
@@ -773,10 +874,21 @@ class RightClickToWalk(BaseWidget):
         self.add_config_change_callback(
             self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
         )
+        self.add_config_change_callback(
+            self.APPLY_GAIN_CONFIG_KEY, self._on_apply_gain_clicked
+        )
+        self.add_config_change_callback(
+            self.TUNE_ANGLE_CONFIG_KEY, self._on_tune_angle_clicked
+        )
         self._sync_center_inputs()
+        self._sync_gain_inputs()
         self.get_config_manager().connect(
             "confirmed",
-            lambda *_args: (self._sync_center_inputs(), self._emit_overlay_event("refresh")),
+            lambda *_args: (
+                self._sync_center_inputs(),
+                self._sync_gain_inputs(),
+                self._emit_overlay_event("refresh"),
+            ),
         )
 
     def _on_calibrate_center_clicked(
@@ -794,7 +906,10 @@ class RightClickToWalk(BaseWidget):
         self._set_calibration_mode(False)
         self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, self.GAIN_DEFAULT)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, self.GAIN_DEFAULT)
         self._sync_center_inputs()
+        self._sync_gain_inputs()
         self._emit_overlay_event("refresh")
 
     def _on_apply_center_clicked(
@@ -816,6 +931,31 @@ class RightClickToWalk(BaseWidget):
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
         self._sync_center_inputs()
         self._emit_overlay_event("refresh")
+
+    def _on_apply_gain_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_x_gain = self.get_config_value(self.X_GAIN_INPUT_CONFIG_KEY)
+        raw_y_gain = self.get_config_value(self.Y_GAIN_INPUT_CONFIG_KEY)
+        x_gain = self._sanitize_gain_value(raw_x_gain)
+        y_gain = self._sanitize_gain_value(raw_y_gain)
+        if x_gain is None or y_gain is None:
+            return
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, x_gain)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, y_gain)
+        self._sync_gain_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_tune_angle_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not self.mapping_mode:
+            return
+        if self._tuning_mode:
+            return
+        self._start_tuning()
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
         if not self._calibration_mode:
@@ -858,6 +998,11 @@ class RightClickToWalk(BaseWidget):
         self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(int(calibrated[0])))
         self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
 
+    def _sync_gain_inputs(self) -> None:
+        x_gain, y_gain = self._get_gains()
+        self.set_config_value(self.X_GAIN_INPUT_CONFIG_KEY, f"{x_gain:.2f}")
+        self.set_config_value(self.Y_GAIN_INPUT_CONFIG_KEY, f"{y_gain:.2f}")
+
     def _set_calibration_mode(self, active: bool) -> None:
         self._calibration_mode = active
         self._emit_overlay_event("start" if active else "stop")
@@ -886,6 +1031,136 @@ class RightClickToWalk(BaseWidget):
             return
         self._set_calibration_mode(False)
 
+    def _sanitize_gain_value(self, raw_value: object) -> float | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return min(max(value, self.GAIN_MIN), self.GAIN_MAX)
+
+    def _get_gains(self) -> tuple[float, float]:
+        raw_x = self.get_config_value(self.X_GAIN_CONFIG_KEY)
+        raw_y = self.get_config_value(self.Y_GAIN_CONFIG_KEY)
+        x_gain = self._sanitize_gain_value(raw_x)
+        y_gain = self._sanitize_gain_value(raw_y)
+        return (
+            x_gain if x_gain is not None else self.GAIN_DEFAULT,
+            y_gain if y_gain is not None else self.GAIN_DEFAULT,
+        )
+
+    def _get_tuning_gains(self) -> tuple[float, float]:
+        if self._tuning_mode and self._tuning_x_gain is not None and self._tuning_y_gain is not None:
+            return self._tuning_x_gain, self._tuning_y_gain
+        return self._get_gains()
+
+    def _start_tuning(self) -> None:
+        self._tuning_mode = True
+        x_gain, y_gain = self._get_gains()
+        self._tuning_x_gain = x_gain
+        self._tuning_y_gain = y_gain
+        self._emit_overlay_event("tune_start")
+
+    def _stop_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        self._tuning_mode = False
+        self._tuning_x_gain = None
+        self._tuning_y_gain = None
+        self._emit_overlay_event("tune_stop")
+
+    def cancel_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        self._sync_gain_inputs()
+        self._stop_tuning()
+
+    def _apply_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        x_gain = self._sanitize_gain_value(self._tuning_x_gain)
+        y_gain = self._sanitize_gain_value(self._tuning_y_gain)
+        if x_gain is None or y_gain is None:
+            self.cancel_tuning()
+            return
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, x_gain)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, y_gain)
+        self._sync_gain_inputs()
+        self._stop_tuning()
+
+    def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
+        if not self._tuning_mode:
+            return False
+        if keyval in (Gdk.KEY_Escape,):
+            self.cancel_tuning()
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self._apply_tuning()
+            return True
+        step = 0.05 if state & Gdk.ModifierType.SHIFT_MASK else 0.01
+        if keyval in (Gdk.KEY_q, Gdk.KEY_Q):
+            self._adjust_tuning_gain("x", -step)
+            return True
+        if keyval in (Gdk.KEY_a, Gdk.KEY_A):
+            self._adjust_tuning_gain("x", step)
+            return True
+        if keyval in (Gdk.KEY_w, Gdk.KEY_W):
+            self._adjust_tuning_gain("y", -step)
+            return True
+        if keyval in (Gdk.KEY_s, Gdk.KEY_S):
+            self._adjust_tuning_gain("y", step)
+            return True
+        return False
+
+    def _adjust_tuning_gain(self, axis: str, delta: float) -> None:
+        if axis == "x":
+            current = self._tuning_x_gain if self._tuning_x_gain is not None else self.GAIN_DEFAULT
+            self._tuning_x_gain = min(max(current + delta, self.GAIN_MIN), self.GAIN_MAX)
+        else:
+            current = self._tuning_y_gain if self._tuning_y_gain is not None else self.GAIN_DEFAULT
+            self._tuning_y_gain = min(max(current + delta, self.GAIN_MIN), self.GAIN_MAX)
+        self._emit_overlay_event("refresh")
+
+    @staticmethod
+    def _vector_to_angle(dx: float, dy: float) -> float:
+        angle = math.degrees(math.atan2(dy, dx))
+        if angle < 0:
+            angle += 360
+        return angle
+
+    def get_tuning_overlay_data(
+        self, cursor_position: tuple[int, int] | None
+    ) -> dict[str, object]:
+        x_gain, y_gain = self._get_tuning_gains()
+        data: dict[str, object] = {
+            "x_gain": x_gain,
+            "y_gain": y_gain,
+            "raw_angle": None,
+            "corrected_angle": None,
+            "raw_vector": None,
+            "corrected_vector": None,
+            "center": self._get_window_center(),
+        }
+        if cursor_position is None:
+            return data
+        center_x, center_y = data["center"]
+        dx = cursor_position[0] - center_x
+        dy = cursor_position[1] - center_y
+        raw_angle = self._vector_to_angle(dx, dy)
+        dx2 = dx * x_gain
+        dy2 = dy * y_gain
+        corrected_angle = self._vector_to_angle(dx2, dy2)
+        data.update(
+            {
+                "raw_angle": raw_angle,
+                "corrected_angle": corrected_angle,
+                "raw_vector": (dx, dy),
+                "corrected_vector": (dx2, dy2),
+            }
+        )
+        return data
+
     def on_delete(self):
         self._emit_overlay_event("unregister")
         super().on_delete()
@@ -905,3 +1180,7 @@ class RightClickToWalk(BaseWidget):
     @property
     def center_y(self):
         return self.y + self.height / 2
+
+    @property
+    def is_tuning(self) -> bool:
+        return self._tuning_mode
