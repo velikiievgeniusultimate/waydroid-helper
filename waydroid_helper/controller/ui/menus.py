@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from gettext import gettext as _
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,7 @@ from waydroid_helper.controller.core.key_system import Key, KeyCombination, KeyR
 from waydroid_helper.util.log import logger
 from waydroid_helper.compat_widget.file_dialog import FileDialog
 from waydroid_helper.controller.widgets.base import BaseWidget
+from waydroid_helper.config.file_manager import ConfigManager as FileConfigManager
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
@@ -32,6 +34,8 @@ if TYPE_CHECKING:
 class ContextMenuManager:
     """动态上下文菜单管理器"""
 
+    DEFAULT_PROFILE_NAME = "Default"
+
     def __init__(self, parent_window: "TransparentWindow"):
         self.parent_window: "TransparentWindow" = parent_window
         self._popover: "Gtk.Popover | None" = None
@@ -39,6 +43,8 @@ class ContextMenuManager:
         self._flow_box: "Gtk.FlowBox | None" = None
         self._tool_flow: "Gtk.FlowBox | None" = None
         self.screen_info = ScreenInfo()
+        self._config_manager = FileConfigManager()
+        self._current_profile = self._load_current_profile()
 
     def show_widget_creation_menu(
         self, x: int, y: int, widget_factory: "WidgetFactory"
@@ -186,6 +192,7 @@ class ContextMenuManager:
             (_("Clear all"), lambda: self._clear_all_widgets()),
             (_("Save layout"), lambda: self._save_layout()),
             (_("Load layout"), lambda: self._load_layout(widget_factory)),
+            (_("Profiles"), lambda: self._show_profile_manager(widget_factory)),
         ]
 
         for label, callback in tool_items:
@@ -259,6 +266,421 @@ class ContextMenuManager:
 
         return layouts_dir
 
+    def _get_profiles_dir(self) -> str:
+        """获取默认的配置文件目录"""
+        config_dir = os.getenv("XDG_CONFIG_HOME", GLib.get_user_config_dir())
+        profiles_dir = os.path.join(config_dir, "waydroid-helper", "profiles")
+        os.makedirs(profiles_dir, exist_ok=True)
+        return profiles_dir
+
+    def _profile_config_key(self) -> str:
+        return "controller.widget_profiles.current"
+
+    def _load_current_profile(self) -> str:
+        profile = self._config_manager.get_value(
+            self._profile_config_key(), self.DEFAULT_PROFILE_NAME
+        )
+        if not isinstance(profile, str) or not profile.strip():
+            return self.DEFAULT_PROFILE_NAME
+        return profile
+
+    def _set_current_profile(self, profile_name: str) -> None:
+        self._current_profile = profile_name
+        self._config_manager.set_value(self._profile_config_key(), profile_name)
+
+    def _normalize_profile_name(self, profile_name: str) -> str | None:
+        cleaned = "".join(ch for ch in profile_name if ch not in "/\\").strip()
+        return cleaned or None
+
+    def _profile_path(self, profile_name: str) -> Path:
+        return Path(self._get_profiles_dir()) / f"{profile_name}.json"
+
+    def _list_profiles(self) -> list[str]:
+        profiles_dir = Path(self._get_profiles_dir())
+        profile_names = {
+            path.stem
+            for path in profiles_dir.glob("*.json")
+            if path.is_file()
+        }
+        profile_names.add(self.DEFAULT_PROFILE_NAME)
+        return sorted(profile_names)
+
+    def _build_layout_data(self) -> dict[str, Any]:
+        """Collect layout data from current widgets."""
+        screen_width, screen_height = self._get_available_screen_size()
+        widgets_data = []
+        child = self.parent_window.fixed.get_first_child()
+        while child:
+            x, y = child.x, child.y
+            width = child.width
+            height = child.height
+            widget_type = type(child).__name__.lower()
+
+            widget_data: dict[str, Any] = {
+                "type": widget_type,
+                "x": float(x),
+                "y": float(y),
+                "width": float(width),
+                "height": float(height),
+            }
+
+            if hasattr(child, "text") and child.text:
+                widget_data["text"] = str(child.text)
+
+            if widget_type == "directionalpad":
+                if hasattr(child, "direction_keys") and child.direction_keys:
+                    widget_data["direction_keys"] = {
+                        "up": self._serialize_key_combination(
+                            child.direction_keys["up"]
+                        ),
+                        "down": self._serialize_key_combination(
+                            child.direction_keys["down"]
+                        ),
+                        "left": self._serialize_key_combination(
+                            child.direction_keys["left"]
+                        ),
+                        "right": self._serialize_key_combination(
+                            child.direction_keys["right"]
+                        ),
+                    }
+            else:
+                if hasattr(child, "final_keys") and child.final_keys:
+                    widget_data["default_keys"] = [
+                        self._serialize_key_combination(kc)
+                        for kc in child.final_keys
+                    ]
+
+            if hasattr(child, "get_config_manager"):
+                config_manager = child.get_config_manager()
+                if config_manager.configs:
+                    widget_data["config"] = config_manager.serialize()
+
+            widgets_data.append(widget_data)
+            child = child.get_next_sibling()
+
+        return {
+            "version": BaseWidget.WIDGET_VERSION,
+            "screen_resolution": {"width": screen_width, "height": screen_height},
+            "widgets": widgets_data,
+            "created_at": datetime.now().isoformat(),
+        }
+
+    def _apply_layout_data(
+        self, layout_data: dict[str, Any], widget_factory: "WidgetFactory"
+    ) -> None:
+        """Apply layout data to current canvas."""
+        if "widgets" not in layout_data:
+            logger.error("Invalid layout file format")
+            return
+
+        if layout_data.get("version") != BaseWidget.WIDGET_VERSION:
+            logger.warning(
+                "Layout file version mismatch: %s != %s",
+                layout_data.get("version"),
+                BaseWidget.WIDGET_VERSION,
+            )
+
+        current_screen_width, current_screen_height = (
+            self._get_available_screen_size()
+        )
+
+        scale_x = 1.0
+        scale_y = 1.0
+        saved_resolution = layout_data.get("screen_resolution")
+
+        if saved_resolution:
+            saved_width = saved_resolution.get("width", current_screen_width)
+            saved_height = saved_resolution.get("height", current_screen_height)
+            scale_x = current_screen_width / saved_width
+            scale_y = current_screen_height / saved_height
+
+        if hasattr(self.parent_window, "on_clear_widgets"):
+            self.parent_window.on_clear_widgets(None)
+
+        for widget_data in layout_data.get("widgets", []):
+            try:
+                widget_type = widget_data.get("type", "")
+                original_x = widget_data.get("x", 0)
+                original_y = widget_data.get("y", 0)
+                original_width = widget_data.get("width", 100)
+                original_height = widget_data.get("height", 100)
+                text = widget_data.get("text", "")
+
+                x = int(original_x * scale_x)
+                y = int(original_y * scale_y)
+                width = int(original_width * scale_x)
+                height = int(original_height * scale_y)
+
+                create_kwargs = {
+                    "width": width,
+                    "height": height,
+                    "text": text,
+                    "event_bus": self.parent_window.event_bus,
+                    "pointer_id_manager": self.parent_window.pointer_id_manager,
+                    "key_registry": self.parent_window.key_registry,
+                }
+
+                if widget_type == "directionalpad":
+                    if "direction_keys" in widget_data:
+                        create_kwargs["direction_keys"] = {
+                            "up": self._deserialize_key_combination(
+                                widget_data["direction_keys"]["up"]
+                            ),
+                            "down": self._deserialize_key_combination(
+                                widget_data["direction_keys"]["down"]
+                            ),
+                            "left": self._deserialize_key_combination(
+                                widget_data["direction_keys"]["left"]
+                            ),
+                            "right": self._deserialize_key_combination(
+                                widget_data["direction_keys"]["right"]
+                            ),
+                        }
+                else:
+                    default_keys = []
+                    if "default_keys" in widget_data:
+                        for key_names in widget_data["default_keys"]:
+                            key_combo = self._deserialize_key_combination(key_names)
+                            if key_combo:
+                                default_keys.append(key_combo)
+                    create_kwargs["default_keys"] = default_keys
+
+                widget = widget_factory.create_widget(widget_type, **create_kwargs)
+
+                if widget:
+                    if hasattr(self.parent_window, "create_widget_at_position"):
+                        self.parent_window.create_widget_at_position(widget, x, y)
+
+                        if "config" in widget_data and hasattr(
+                            widget, "get_config_manager"
+                        ):
+                            config_manager = widget.get_config_manager()
+                            config_manager.deserialize(widget_data["config"])
+
+            except Exception as e:
+                logger.error(f"Failed to create widget: {e}")
+                continue
+
+    def _save_layout_to_path(self, file_path: str) -> None:
+        """Save layout data to a file path."""
+        try:
+            layout_data = self._build_layout_data()
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(layout_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save layout: {e}")
+
+    def _load_layout_from_path(
+        self, file_path: str, widget_factory: "WidgetFactory"
+    ) -> None:
+        """Load layout data from a file path."""
+        if not Path(file_path).exists():
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                layout_data = json.load(f)
+            self._apply_layout_data(layout_data, widget_factory)
+        except Exception as e:
+            logger.error(f"Failed to load layout: {e}")
+
+    def save_current_profile(self) -> None:
+        """Persist current layout to the active profile."""
+        profile_name = self._normalize_profile_name(self._current_profile)
+        if not profile_name:
+            return
+        self._save_layout_to_path(str(self._profile_path(profile_name)))
+
+    def load_current_profile(self, widget_factory: "WidgetFactory") -> None:
+        """Load the active profile if it exists."""
+        profile_name = self._normalize_profile_name(self._current_profile)
+        if not profile_name:
+            return
+        profile_path = self._profile_path(profile_name)
+        if profile_path.exists():
+            self._load_layout_from_path(str(profile_path), widget_factory)
+        else:
+            self._set_current_profile(profile_name)
+
+    def _switch_profile(self, profile_name: str, widget_factory: "WidgetFactory") -> None:
+        normalized = self._normalize_profile_name(profile_name)
+        if not normalized:
+            self.parent_window.show_notification(_("Profile name cannot be empty"))
+            return
+
+        if normalized == self._current_profile:
+            self.parent_window.show_notification(_("Profile already selected"))
+            return
+
+        self.save_current_profile()
+        profile_path = self._profile_path(normalized)
+        if profile_path.exists():
+            self._load_layout_from_path(str(profile_path), widget_factory)
+        else:
+            self.parent_window.on_clear_widgets(None)
+        self._set_current_profile(normalized)
+        self.parent_window.show_notification(
+            _("Switched to profile: %s") % normalized
+        )
+
+    def _update_profile(self, profile_name: str) -> None:
+        normalized = self._normalize_profile_name(profile_name)
+        if not normalized:
+            self.parent_window.show_notification(_("Profile name cannot be empty"))
+            return
+        self._save_layout_to_path(str(self._profile_path(normalized)))
+        self._set_current_profile(normalized)
+        self.parent_window.show_notification(_("Profile updated"))
+
+    def _create_profile(self, profile_name: str, widget_factory: "WidgetFactory") -> None:
+        normalized = self._normalize_profile_name(profile_name)
+        if not normalized:
+            self.parent_window.show_notification(_("Profile name cannot be empty"))
+            return
+        profile_path = self._profile_path(normalized)
+        if profile_path.exists():
+            self.parent_window.show_notification(_("Profile already exists"))
+            return
+        self._save_layout_to_path(str(profile_path))
+        self._set_current_profile(normalized)
+        self.parent_window.show_notification(
+            _("Profile created: %s") % normalized
+        )
+        self._load_layout_from_path(str(profile_path), widget_factory)
+
+    def _rename_profile(self, old_name: str, new_name: str) -> None:
+        normalized_old = self._normalize_profile_name(old_name)
+        normalized_new = self._normalize_profile_name(new_name)
+        if not normalized_old or not normalized_new:
+            self.parent_window.show_notification(_("Profile name cannot be empty"))
+            return
+        old_path = self._profile_path(normalized_old)
+        new_path = self._profile_path(normalized_new)
+        if not old_path.exists():
+            self.parent_window.show_notification(_("Profile not found"))
+            return
+        if new_path.exists():
+            self.parent_window.show_notification(_("Profile already exists"))
+            return
+        old_path.rename(new_path)
+        if normalized_old == self._current_profile:
+            self._set_current_profile(normalized_new)
+        self.parent_window.show_notification(
+            _("Profile renamed to: %s") % normalized_new
+        )
+
+    def _refresh_profile_dropdown(
+        self, dropdown: Gtk.DropDown, profile_names: list[str], selected: str
+    ) -> None:
+        string_list = Gtk.StringList()
+        for name in profile_names:
+            string_list.append(name)
+        dropdown.set_model(string_list)
+        if selected in profile_names:
+            dropdown.set_selected(profile_names.index(selected))
+
+    def _get_selected_profile_name(self, dropdown: Gtk.DropDown) -> str:
+        selected_item = dropdown.get_selected_item()
+        if isinstance(selected_item, Gtk.StringObject):
+            return selected_item.get_string()
+        profile_names = self._list_profiles()
+        selected_index = dropdown.get_selected()
+        if 0 <= selected_index < len(profile_names):
+            return profile_names[selected_index]
+        return self.DEFAULT_PROFILE_NAME
+
+    def _show_profile_manager(self, widget_factory: "WidgetFactory") -> None:
+        dialog = Gtk.Dialog(title=_("Profile Manager"), transient_for=self.parent_window)
+        dialog.set_modal(True)
+        dialog.set_default_size(360, 260)
+        dialog.add_button(_("Close"), Gtk.ResponseType.CLOSE)
+
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+
+        current_label = Gtk.Label(label=_("Current profile"), xalign=0)
+        content.append(current_label)
+
+        profile_names = self._list_profiles()
+        profile_dropdown = Gtk.DropDown()
+        self._refresh_profile_dropdown(
+            profile_dropdown, profile_names, self._current_profile
+        )
+        content.append(profile_dropdown)
+
+        switch_button = Gtk.Button(label=_("Switch profile"))
+        switch_button.connect(
+            "clicked",
+            lambda _btn: self._switch_profile(
+                self._get_selected_profile_name(profile_dropdown), widget_factory
+            ),
+        )
+        content.append(switch_button)
+
+        update_button = Gtk.Button(label=_("Update selected profile"))
+        update_button.connect(
+            "clicked",
+            lambda _btn: self._update_profile(
+                self._get_selected_profile_name(profile_dropdown)
+            ),
+        )
+        content.append(update_button)
+
+        new_profile_label = Gtk.Label(label=_("Create new profile"), xalign=0)
+        content.append(new_profile_label)
+
+        new_profile_entry = Gtk.Entry()
+        new_profile_entry.set_placeholder_text(_("New profile name"))
+        content.append(new_profile_entry)
+
+        create_button = Gtk.Button(label=_("Create profile from current"))
+        create_button.connect(
+            "clicked",
+            lambda _btn: self._create_profile(
+                new_profile_entry.get_text(), widget_factory
+            ),
+        )
+        content.append(create_button)
+
+        rename_label = Gtk.Label(label=_("Rename profile"), xalign=0)
+        content.append(rename_label)
+
+        rename_entry = Gtk.Entry()
+        rename_entry.set_placeholder_text(_("New name for selected profile"))
+        content.append(rename_entry)
+
+        rename_button = Gtk.Button(label=_("Rename selected profile"))
+        rename_button.connect(
+            "clicked",
+            lambda _btn: self._rename_profile(
+                self._get_selected_profile_name(profile_dropdown),
+                rename_entry.get_text(),
+            ),
+        )
+        content.append(rename_button)
+
+        def on_dialog_close(_dialog, _response_id):
+            dialog.destroy()
+
+        def refresh_profiles():
+            updated_profiles = self._list_profiles()
+            selected = self._current_profile
+            self._refresh_profile_dropdown(
+                profile_dropdown, updated_profiles, selected
+            )
+            return False
+
+        update_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
+        create_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
+        rename_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
+        switch_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
+
+        dialog.connect("response", on_dialog_close)
+        dialog.show()
+
     def _save_layout(self):
         """保存当前布局到文件，包括屏幕尺寸信息"""
         # 创建文件过滤器，只显示 JSON 文件
@@ -286,88 +708,7 @@ class ContextMenuManager:
         """处理保存文件选择的回调"""
         if not success or not file_path:
             return
-
-        try:
-            # 获取当前屏幕尺寸
-            screen_width, screen_height = self._get_available_screen_size()
-
-            # 收集所有widget的信息
-            widgets_data = []
-            if hasattr(self.parent_window, "fixed"):
-                child: "BaseWidget | None" = self.parent_window.fixed.get_first_child()
-                while child:
-                    # 获取widget的位置
-                    x, y = child.x, child.y
-
-                    # 获取widget的尺寸
-                    width = child.width
-                    height = child.height
-
-                    # 获取widget类型
-                    widget_type = type(child).__name__.lower()
-
-                    # 创建widget数据
-                    widget_data: dict[str, Any] = {
-                        "type": widget_type,
-                        "x": float(x),
-                        "y": float(y),
-                        "width": float(width),
-                        "height": float(height),
-                    }
-
-                    # 如果widget有text属性，也保存
-                    if hasattr(child, "text") and child.text:
-                        widget_data["text"] = str(child.text)
-
-                    # 保存按键映射 - 根据组件类型处理
-                    if widget_type == "directionalpad":
-                        # DirectionalPad 有四个方向的按键
-                        if hasattr(child, "direction_keys") and child.direction_keys:
-                            widget_data["direction_keys"] = {
-                                "up": self._serialize_key_combination(
-                                    child.direction_keys["up"]
-                                ),
-                                "down": self._serialize_key_combination(
-                                    child.direction_keys["down"]
-                                ),
-                                "left": self._serialize_key_combination(
-                                    child.direction_keys["left"]
-                                ),
-                                "right": self._serialize_key_combination(
-                                    child.direction_keys["right"]
-                                ),
-                            }
-                    else:
-                        # 其他组件的通用按键映射
-                        if hasattr(child, "final_keys") and child.final_keys:
-                            widget_data["default_keys"] = [
-                                self._serialize_key_combination(kc)
-                                for kc in child.final_keys
-                            ]
-
-                    # 保存组件配置
-                    if hasattr(child, "get_config_manager"):
-                        config_manager = child.get_config_manager()
-                        if config_manager.configs:
-                            widget_data["config"] = config_manager.serialize()
-
-                    widgets_data.append(widget_data)
-                    child = child.get_next_sibling()
-
-            # 创建完整的布局数据，包括屏幕尺寸信息
-            layout_data = {
-                "version": BaseWidget.WIDGET_VERSION,  # 增加版本号
-                "screen_resolution": {"width": screen_width, "height": screen_height},
-                "widgets": widgets_data,
-                "created_at": str(Path().absolute()),  # 保存创建时间戳
-            }
-
-            # 保存到文件
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(layout_data, f, indent=2, ensure_ascii=False)
-
-        except Exception as e:
-            logger.error(f"Failed to save layout: {e}")
+        self._save_layout_to_path(file_path)
 
     def _load_layout(self, widget_factory: "WidgetFactory"):
         """从文件加载布局，支持屏幕尺寸缩放适配"""
@@ -399,118 +740,4 @@ class ContextMenuManager:
         """处理加载文件选择的回调"""
         if not success or not file_path:
             return
-
-        try:
-            # 检查文件是否存在
-            if not Path(file_path).exists():
-                return
-
-            # 读取布局文件
-            with open(file_path, "r", encoding="utf-8") as f:
-                layout_data = json.load(f)
-
-            # 验证布局数据
-            if "widgets" not in layout_data:
-                logger.error("Invalid layout file format")
-                return
-            
-            if layout_data.get("version") != BaseWidget.WIDGET_VERSION:
-                logger.warning(f"Layout file version mismatch: {layout_data.get('version')} != {BaseWidget.WIDGET_VERSION}")
-
-            # 获取当前屏幕尺寸
-            current_screen_width, current_screen_height = (
-                self._get_available_screen_size()
-            )
-
-            # 计算缩放比例
-            scale_x = 1.0
-            scale_y = 1.0
-            saved_resolution = layout_data.get("screen_resolution")
-
-            if saved_resolution:
-                saved_width = saved_resolution.get("width", current_screen_width)
-                saved_height = saved_resolution.get("height", current_screen_height)
-                scale_x = current_screen_width / saved_width
-                scale_y = current_screen_height / saved_height
-
-            # 清空现有组件
-            if hasattr(self.parent_window, "on_clear_widgets"):
-                self.parent_window.on_clear_widgets(None)
-
-            # 重新创建组件
-            widgets_created = 0
-            for widget_data in layout_data["widgets"]:
-                try:
-                    # 获取基本信息
-                    widget_type = widget_data.get("type", "")
-                    original_x = widget_data.get("x", 0)
-                    original_y = widget_data.get("y", 0)
-                    original_width = widget_data.get("width", 100)
-                    original_height = widget_data.get("height", 100)
-                    text = widget_data.get("text", "")
-
-                    # 应用缩放比例
-                    x = int(original_x * scale_x)
-                    y = int(original_y * scale_y)
-                    width = int(original_width * scale_x)
-                    height = int(original_height * scale_y)
-
-                    # 根据组件类型准备参数
-                    create_kwargs = {
-                        "width": width,
-                        "height": height,
-                        "text": text,
-                        "event_bus": self.parent_window.event_bus,
-                        "pointer_id_manager": self.parent_window.pointer_id_manager,
-                        "key_registry": self.parent_window.key_registry,
-                    }
-
-                    # 添加按键映射参数
-                    if widget_type == "directionalpad":
-                        if "direction_keys" in widget_data:
-                            create_kwargs["direction_keys"] = {
-                                "up": self._deserialize_key_combination(
-                                    widget_data["direction_keys"]["up"]
-                                ),
-                                "down": self._deserialize_key_combination(
-                                    widget_data["direction_keys"]["down"]
-                                ),
-                                "left": self._deserialize_key_combination(
-                                    widget_data["direction_keys"]["left"]
-                                ),
-                                "right": self._deserialize_key_combination(
-                                    widget_data["direction_keys"]["right"]
-                                ),
-                            }
-                    else:
-                        # 其他组件的通用按键
-                        default_keys = []
-                        if "default_keys" in widget_data:
-                            for key_names in widget_data["default_keys"]:
-                                key_combo = self._deserialize_key_combination(key_names)
-                                if key_combo:
-                                    default_keys.append(key_combo)
-                        create_kwargs["default_keys"] = default_keys
-
-                    # 创建widget
-                    widget = widget_factory.create_widget(widget_type, **create_kwargs)
-
-                    if widget:
-                        # 在缩放后的位置创建widget
-                        if hasattr(self.parent_window, "create_widget_at_position"):
-                            self.parent_window.create_widget_at_position(widget, x, y)
-
-                            # 恢复配置
-                            if "config" in widget_data and hasattr(
-                                widget, "get_config_manager"
-                            ):
-                                config_manager = widget.get_config_manager()
-                                config_manager.deserialize(widget_data["config"])
-
-                            widgets_created += 1
-
-                except Exception as e:
-                    logger.error(f"Failed to create widget: {e}")
-                    continue
-        except Exception as e:
-            logger.error(f"Failed to load layout: {e}")
+        self._load_layout_from_path(file_path, widget_factory)
