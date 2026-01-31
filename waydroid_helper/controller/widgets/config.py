@@ -567,6 +567,26 @@ class ConfigManager(GObject.Object):
         """UI控件值变更回调"""
         if not self._updating_ui:
             self.set_value(key, value, update_ui=False)
+
+    def create_ui_widget_for_key(self, key: str) -> Gtk.Widget | None:
+        """Create or reuse a UI widget for a specific config key."""
+        config = self.configs.get(key)
+        if config is None:
+            logger.warning("Config key %s was not found when building UI.", key)
+            return None
+        if key in self.ui_widgets:
+            return self.ui_widgets[key]
+        try:
+            widget = config.create_ui_widget(self._on_ui_value_changed)
+        except Exception as e:
+            logger.error(f"Failed to create UI for config {key}: {e}")
+            return None
+        self.ui_widgets[key] = widget
+        return widget
+
+    def create_ui_widget_for_config(self, config: ConfigItem) -> Gtk.Widget | None:
+        """Create or reuse a UI widget for a config item."""
+        return self.create_ui_widget_for_key(config.key)
     
     def create_ui_panel(self, parent: Gtk.Widget|None = None) -> Gtk.Widget:
         """创建配置面板UI"""
@@ -583,12 +603,16 @@ class ConfigManager(GObject.Object):
         
         # 为每个配置项创建UI
         for key, config in self.configs.items():
-            try:
-                widget = config.create_ui_widget(self._on_ui_value_changed)
-                self.ui_widgets[key] = widget
-                main_box.append(widget)
-            except Exception as e:
-                logger.error(f"Failed to create UI for config {key}: {e}")
+            widget = self.create_ui_widget_for_config(config)
+            if widget is None:
+                error_label = Gtk.Label(
+                    label=f"Failed to load setting: {config.label}",
+                    xalign=0,
+                )
+                error_label.set_wrap(True)
+                main_box.append(error_label)
+                continue
+            main_box.append(widget)
         
         return main_box
     

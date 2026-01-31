@@ -479,9 +479,9 @@ class TransparentWindow(Adw.Window):
                 # mask_layer.set_css_classes(["modal-mask"])
                 # mask_layer.set_opacity(0.01)  # 几乎透明但可见，确保能接收事件
 
-                # 关键：设置遮罩层为模态，阻止其他widget接收事件
-                mask_layer.set_can_target(True)
-                mask_layer.set_focusable(True)
+                # Allow the mask to be activated only during calibration.
+                mask_layer.set_can_target(False)
+                mask_layer.set_focusable(False)
 
                 # 添加事件控制器，确保消费所有事件
                 controllers = []
@@ -565,7 +565,6 @@ class TransparentWindow(Adw.Window):
 
                 overlay.add_overlay(mask_layer)
                 mask_layer.set_visible(True)
-                mask_layer.grab_focus()
                 self.active_mask_layer = mask_layer
 
                 # 设置弹出窗口关闭时的清理逻辑
@@ -623,7 +622,10 @@ class TransparentWindow(Adw.Window):
         popover.set_parent(self)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        main_box.set_size_request(250, -1)
+        min_width = getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250)
+        min_height = getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
+        max_height = getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
+        main_box.set_size_request(min_width, -1)
         popover.set_child(main_box)
         self.active_settings_popover = popover
         self.active_settings_panel = main_box
@@ -640,8 +642,19 @@ class TransparentWindow(Adw.Window):
             label = Gtk.Label(label=_("This widget has no settings."))
             main_box.append(label)
         else:
-            config_panel = config_manager.create_ui_panel()
-            main_box.append(config_panel)
+            try:
+                config_panel = widget.create_settings_panel()
+            except Exception as exc:
+                logger.error("Failed to build settings panel: %s", exc)
+                config_panel = Gtk.Label(
+                    label=_("Unable to load settings. Please reopen the panel.")
+                )
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.set_min_content_height(min_height)
+            scroller.set_max_content_height(max_height)
+            scroller.set_child(config_panel)
+            main_box.append(scroller)
 
             confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
             confirm_button.add_css_class("suggested-action")
@@ -678,12 +691,14 @@ class TransparentWindow(Adw.Window):
         if action == "start":
             self.right_click_overlay.set_active_widget(widget)
             self._set_settings_panel_visible(False, widget)
+            self._set_mask_interactive(True)
             self._set_mask_dimmed(True)
             return
         if action == "stop":
             if self.right_click_overlay.active_widget is widget:
                 self.right_click_overlay.set_active_widget(None)
             self._set_settings_panel_visible(True, widget)
+            self._set_mask_interactive(False)
             self._set_mask_dimmed(False)
             return
         if action == "tune_start":
@@ -708,6 +723,14 @@ class TransparentWindow(Adw.Window):
         if self.active_settings_popover is not None:
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
+
+    def _set_mask_interactive(self, interactive: bool) -> None:
+        if self.active_mask_layer is None:
+            return
+        self.active_mask_layer.set_can_target(interactive)
+        self.active_mask_layer.set_focusable(interactive)
+        if interactive:
+            self.active_mask_layer.grab_focus()
 
     def _set_mask_dimmed(self, dimmed: bool) -> None:
         if self.active_mask_layer is None:

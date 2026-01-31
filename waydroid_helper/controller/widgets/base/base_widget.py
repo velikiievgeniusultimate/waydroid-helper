@@ -56,6 +56,9 @@ class BaseWidget(Gtk.DrawingArea):
     ALLOW_CONTEXT_MENU_CREATION = True  # 是否允许通过右键菜单创建
 
     SETTINGS_PANEL_AUTO_HIDE = True
+    SETTINGS_PANEL_MIN_WIDTH = 260
+    SETTINGS_PANEL_MIN_HEIGHT = 300
+    SETTINGS_PANEL_MAX_HEIGHT = 600
 
     # 定义GObject属性
     __gtype_name__ = "BaseWidget"
@@ -139,6 +142,10 @@ class BaseWidget(Gtk.DrawingArea):
     def get_config_manager(self) -> ConfigManager:
         """获取配置管理器"""
         return self.config_manager
+
+    def create_settings_panel(self) -> Gtk.Widget:
+        """Create the default settings panel UI."""
+        return self.config_manager.create_ui_panel()
 
     def set_config_value(self, key: str, value: Any) -> bool:
         """设置配置值"""
