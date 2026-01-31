@@ -1739,6 +1739,7 @@ class KeyMapper(Adw.Application):
 
     async def _do_shutdown(self) -> None:
         if self.window:
+            self.window.menu_manager.save_current_profile()
             self.window.on_clear_widgets(None)
             await self.window.close_server()
             await self.window.cleanup_scrcpy()
