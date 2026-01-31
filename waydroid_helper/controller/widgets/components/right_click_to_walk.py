@@ -55,9 +55,29 @@ class RightClickToWalk(BaseWidget):
     Y_GAIN_INPUT_CONFIG_KEY = "y_gain_input"
     APPLY_GAIN_CONFIG_KEY = "apply_gains"
     TUNE_ANGLE_CONFIG_KEY = "tune_angle"
+    UP_DIST_CONFIG_KEY = "up_dist_px"
+    DOWN_DIST_CONFIG_KEY = "down_dist_px"
+    LEFT_DIST_CONFIG_KEY = "left_dist_px"
+    RIGHT_DIST_CONFIG_KEY = "right_dist_px"
+    UP_DIST_INPUT_CONFIG_KEY = "up_dist_input"
+    DOWN_DIST_INPUT_CONFIG_KEY = "down_dist_input"
+    LEFT_DIST_INPUT_CONFIG_KEY = "left_dist_input"
+    RIGHT_DIST_INPUT_CONFIG_KEY = "right_dist_input"
+    APPLY_ANCHORS_CONFIG_KEY = "apply_anchors"
+    RESET_ANCHORS_CONFIG_KEY = "reset_anchors"
+    SET_UP_ANCHOR_CONFIG_KEY = "set_up_anchor"
+    SET_DOWN_ANCHOR_CONFIG_KEY = "set_down_anchor"
+    SET_LEFT_ANCHOR_CONFIG_KEY = "set_left_anchor"
+    SET_RIGHT_ANCHOR_CONFIG_KEY = "set_right_anchor"
+    DEADZONE_CONFIG_KEY = "deadzone"
+    DEADZONE_INPUT_CONFIG_KEY = "deadzone_input"
+    APPLY_DEADZONE_CONFIG_KEY = "apply_deadzone"
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
+    DEADZONE_DEFAULT = 0.08
+    DEADZONE_MIN = 0.0
+    DEADZONE_MAX = 0.9
 
     def __init__(
         self,
@@ -128,6 +148,7 @@ class RightClickToWalk(BaseWidget):
         self._tuning_x_gain: float | None = None
         self._tuning_y_gain: float | None = None
         self._locked_target_position: tuple[float, float] | None = None
+        self._anchor_calibration_axis: str | None = None
 
         self.setup_config()
         self.event_bus.subscribe(
@@ -581,25 +602,53 @@ class RightClickToWalk(BaseWidget):
         x1: float,
         y1: float,
     ) -> tuple[float, float]:
-        """计算目标位置（圆边界上的交点）"""
+        """计算目标位置（基于校准形状映射到理想圆）"""
         dx = x1 - x0
         dy = y1 - y0
+        normalized = self._normalize_cursor_vector(dx, dy)
+        if normalized is None:
+            return self._get_fallback_target_position(cx, cy, r, dx, dy)
+        nx, ny = normalized
+        return (cx + nx * r, cy + ny * r)
+
+    def _get_fallback_target_position(
+        self, cx: float, cy: float, r: float, dx: float, dy: float
+    ) -> tuple[float, float]:
+        """Fallback to gain-based circle when anchors are missing."""
         x_gain, y_gain = self._get_gains()
         dx *= x_gain
         dy *= y_gain
         length = math.hypot(dx, dy)
         if length == 0:
-            return (cx, cy)  # 如果没有方向，返回中心点
-
-        # 单位方向向量
+            return (cx, cy)
         dx /= length
         dy /= length
+        return (cx + dx * r, cy + dy * r)
 
-        # 从圆心出发沿着方向 (dx, dy)，走 r 的距离
-        px = cx + dx * r
-        py = cy + dy * r
-
-        return (px, py)
+    def _normalize_cursor_vector(self, dx: float, dy: float) -> tuple[float, float] | None:
+        anchors = self._get_anchor_distances()
+        if anchors is None:
+            return None
+        up_dist, down_dist, left_dist, right_dist = anchors
+        rx = right_dist if dx >= 0 else left_dist
+        ry = down_dist if dy >= 0 else up_dist
+        if rx <= 0 or ry <= 0:
+            return None
+        nx = dx / rx
+        ny = dy / ry
+        length = math.hypot(nx, ny)
+        if length > 1.0:
+            nx /= length
+            ny /= length
+            length = 1.0
+        deadzone = self._get_deadzone()
+        if length < deadzone:
+            return (0.0, 0.0)
+        if length > 0 and deadzone > 0:
+            scale = (length - deadzone) / (1.0 - deadzone)
+            nx *= scale / length
+            ny *= scale / length
+        return (nx, ny)
 
     def on_key_triggered(
         self,
@@ -850,6 +899,147 @@ class RightClickToWalk(BaseWidget):
                 "Controller Widgets", "Live tuning overlay for ellipse correction."
             ),
         )
+        up_dist_config = create_text_config(
+            key=self.UP_DIST_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Up Distance (stored)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored up anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        down_dist_config = create_text_config(
+            key=self.DOWN_DIST_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Down Distance (stored)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored down anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        left_dist_config = create_text_config(
+            key=self.LEFT_DIST_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Left Distance (stored)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored left anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        right_dist_config = create_text_config(
+            key=self.RIGHT_DIST_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Right Distance (stored)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored right anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        up_dist_input_config = create_text_config(
+            key=self.UP_DIST_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Up Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Anchor distance from center to top in pixels."
+            ),
+        )
+        down_dist_input_config = create_text_config(
+            key=self.DOWN_DIST_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Down Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Anchor distance from center to bottom in pixels."
+            ),
+        )
+        left_dist_input_config = create_text_config(
+            key=self.LEFT_DIST_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Left Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Anchor distance from center to left in pixels."
+            ),
+        )
+        right_dist_input_config = create_text_config(
+            key=self.RIGHT_DIST_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Right Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Anchor distance from center to right in pixels."
+            ),
+        )
+        apply_anchors_config = create_action_config(
+            key=self.APPLY_ANCHORS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Anchors"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Validate and apply anchor distances."
+            ),
+        )
+        reset_anchors_config = create_action_config(
+            key=self.RESET_ANCHORS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Anchors"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets", "Clear all anchor distances."
+            ),
+        )
+        set_up_anchor_config = create_action_config(
+            key=self.SET_UP_ANCHOR_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Up Anchor"),
+            button_label=pgettext("Controller Widgets", "Set Up"),
+            description=pgettext(
+                "Controller Widgets", "Click then choose the top anchor position."
+            ),
+        )
+        set_down_anchor_config = create_action_config(
+            key=self.SET_DOWN_ANCHOR_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Down Anchor"),
+            button_label=pgettext("Controller Widgets", "Set Down"),
+            description=pgettext(
+                "Controller Widgets", "Click then choose the bottom anchor position."
+            ),
+        )
+        set_left_anchor_config = create_action_config(
+            key=self.SET_LEFT_ANCHOR_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Left Anchor"),
+            button_label=pgettext("Controller Widgets", "Set Left"),
+            description=pgettext(
+                "Controller Widgets", "Click then choose the left anchor position."
+            ),
+        )
+        set_right_anchor_config = create_action_config(
+            key=self.SET_RIGHT_ANCHOR_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Right Anchor"),
+            button_label=pgettext("Controller Widgets", "Set Right"),
+            description=pgettext(
+                "Controller Widgets", "Click then choose the right anchor position."
+            ),
+        )
+        deadzone_config = create_text_config(
+            key=self.DEADZONE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Deadzone (stored)"),
+            value=str(self.DEADZONE_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Stored deadzone size for normalized input."
+            ),
+            visible=False,
+        )
+        deadzone_input_config = create_text_config(
+            key=self.DEADZONE_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Deadzone"),
+            value=str(self.DEADZONE_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Deadzone size (0.0–0.9) in normalized units."
+            ),
+        )
+        apply_deadzone_config = create_action_config(
+            key=self.APPLY_DEADZONE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Deadzone"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Validate and apply deadzone size."
+            ),
+        )
 
         self.add_config_item(calibrate_center_config)
         self.add_config_item(reset_center_config)
@@ -864,6 +1054,23 @@ class RightClickToWalk(BaseWidget):
         self.add_config_item(y_gain_input_config)
         self.add_config_item(apply_gain_config)
         self.add_config_item(tune_angle_config)
+        self.add_config_item(up_dist_config)
+        self.add_config_item(down_dist_config)
+        self.add_config_item(left_dist_config)
+        self.add_config_item(right_dist_config)
+        self.add_config_item(up_dist_input_config)
+        self.add_config_item(down_dist_input_config)
+        self.add_config_item(left_dist_input_config)
+        self.add_config_item(right_dist_input_config)
+        self.add_config_item(apply_anchors_config)
+        self.add_config_item(reset_anchors_config)
+        self.add_config_item(set_up_anchor_config)
+        self.add_config_item(set_down_anchor_config)
+        self.add_config_item(set_left_anchor_config)
+        self.add_config_item(set_right_anchor_config)
+        self.add_config_item(deadzone_config)
+        self.add_config_item(deadzone_input_config)
+        self.add_config_item(apply_deadzone_config)
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
@@ -880,13 +1087,38 @@ class RightClickToWalk(BaseWidget):
         self.add_config_change_callback(
             self.TUNE_ANGLE_CONFIG_KEY, self._on_tune_angle_clicked
         )
+        self.add_config_change_callback(
+            self.APPLY_ANCHORS_CONFIG_KEY, self._on_apply_anchors_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_ANCHORS_CONFIG_KEY, self._on_reset_anchors_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_UP_ANCHOR_CONFIG_KEY, self._on_set_anchor_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_DOWN_ANCHOR_CONFIG_KEY, self._on_set_anchor_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_LEFT_ANCHOR_CONFIG_KEY, self._on_set_anchor_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_RIGHT_ANCHOR_CONFIG_KEY, self._on_set_anchor_clicked
+        )
+        self.add_config_change_callback(
+            self.APPLY_DEADZONE_CONFIG_KEY, self._on_apply_deadzone_clicked
+        )
         self._sync_center_inputs()
         self._sync_gain_inputs()
+        self._sync_anchor_inputs()
+        self._sync_deadzone_inputs()
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
                 self._sync_center_inputs(),
                 self._sync_gain_inputs(),
+                self._sync_anchor_inputs(),
+                self._sync_deadzone_inputs(),
                 self._emit_overlay_event("refresh"),
             ),
         )
@@ -896,6 +1128,7 @@ class RightClickToWalk(BaseWidget):
     ) -> None:
         if restoring:
             return
+        self._anchor_calibration_axis = None
         self._set_calibration_mode(True)
 
     def _on_reset_center_clicked(
@@ -951,7 +1184,7 @@ class RightClickToWalk(BaseWidget):
     def _on_tune_angle_clicked(
         self, key: str, value: bool, restoring: bool
     ) -> None:
-        if restoring or not self.mapping_mode:
+        if restoring or self.mapping_mode:
             return
         if self._tuning_mode:
             return
@@ -967,6 +1200,18 @@ class RightClickToWalk(BaseWidget):
             return
         w, h = self._get_window_size()
         if x < 0 or y < 0 or x >= w or y >= h:
+            return
+        center = self._get_window_center()
+        if self._anchor_calibration_axis is not None:
+            axis = self._anchor_calibration_axis
+            distance = self._get_anchor_distance_from_click(axis, center, (x, y))
+            if distance is None:
+                return
+            config_key = self._get_anchor_config_key(axis)
+            self.set_config_value(config_key, distance)
+            self._sync_anchor_inputs()
+            self._set_calibration_mode(False)
+            self._emit_overlay_event("refresh")
             return
         self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
@@ -1005,6 +1250,8 @@ class RightClickToWalk(BaseWidget):
 
     def _set_calibration_mode(self, active: bool) -> None:
         self._calibration_mode = active
+        if not active:
+            self._anchor_calibration_axis = None
         self._emit_overlay_event("start" if active else "stop")
 
     def _emit_overlay_event(self, action: str) -> None:
@@ -1184,3 +1431,213 @@ class RightClickToWalk(BaseWidget):
     @property
     def is_tuning(self) -> bool:
         return self._tuning_mode
+
+    def _sanitize_anchor_distance(self, raw_value: object) -> int | None:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return value
+
+    def _get_anchor_distances(self) -> tuple[int, int, int, int] | None:
+        raw_up = self.get_config_value(self.UP_DIST_CONFIG_KEY)
+        raw_down = self.get_config_value(self.DOWN_DIST_CONFIG_KEY)
+        raw_left = self.get_config_value(self.LEFT_DIST_CONFIG_KEY)
+        raw_right = self.get_config_value(self.RIGHT_DIST_CONFIG_KEY)
+        up = self._sanitize_anchor_distance(raw_up)
+        down = self._sanitize_anchor_distance(raw_down)
+        left = self._sanitize_anchor_distance(raw_left)
+        right = self._sanitize_anchor_distance(raw_right)
+        if None in (up, down, left, right):
+            return None
+        return (up, down, left, right)
+
+    def _sync_anchor_inputs(self) -> None:
+        raw_up = self._sanitize_anchor_distance(
+            self.get_config_value(self.UP_DIST_CONFIG_KEY)
+        )
+        raw_down = self._sanitize_anchor_distance(
+            self.get_config_value(self.DOWN_DIST_CONFIG_KEY)
+        )
+        raw_left = self._sanitize_anchor_distance(
+            self.get_config_value(self.LEFT_DIST_CONFIG_KEY)
+        )
+        raw_right = self._sanitize_anchor_distance(
+            self.get_config_value(self.RIGHT_DIST_CONFIG_KEY)
+        )
+        self.set_config_value(
+            self.UP_DIST_INPUT_CONFIG_KEY, "" if raw_up is None else str(raw_up)
+        )
+        self.set_config_value(
+            self.DOWN_DIST_INPUT_CONFIG_KEY, "" if raw_down is None else str(raw_down)
+        )
+        self.set_config_value(
+            self.LEFT_DIST_INPUT_CONFIG_KEY, "" if raw_left is None else str(raw_left)
+        )
+        self.set_config_value(
+            self.RIGHT_DIST_INPUT_CONFIG_KEY, "" if raw_right is None else str(raw_right)
+        )
+
+    def _on_apply_anchors_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        up = self._sanitize_anchor_distance(
+            self.get_config_value(self.UP_DIST_INPUT_CONFIG_KEY)
+        )
+        down = self._sanitize_anchor_distance(
+            self.get_config_value(self.DOWN_DIST_INPUT_CONFIG_KEY)
+        )
+        left = self._sanitize_anchor_distance(
+            self.get_config_value(self.LEFT_DIST_INPUT_CONFIG_KEY)
+        )
+        right = self._sanitize_anchor_distance(
+            self.get_config_value(self.RIGHT_DIST_INPUT_CONFIG_KEY)
+        )
+        if None in (up, down, left, right):
+            return
+        self.set_config_value(self.UP_DIST_CONFIG_KEY, up)
+        self.set_config_value(self.DOWN_DIST_CONFIG_KEY, down)
+        self.set_config_value(self.LEFT_DIST_CONFIG_KEY, left)
+        self.set_config_value(self.RIGHT_DIST_CONFIG_KEY, right)
+        self._sync_anchor_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_reset_anchors_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self.set_config_value(self.UP_DIST_CONFIG_KEY, "")
+        self.set_config_value(self.DOWN_DIST_CONFIG_KEY, "")
+        self.set_config_value(self.LEFT_DIST_CONFIG_KEY, "")
+        self.set_config_value(self.RIGHT_DIST_CONFIG_KEY, "")
+        self._sync_anchor_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_set_anchor_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or self.mapping_mode:
+            return
+        axis_map = {
+            self.SET_UP_ANCHOR_CONFIG_KEY: "up",
+            self.SET_DOWN_ANCHOR_CONFIG_KEY: "down",
+            self.SET_LEFT_ANCHOR_CONFIG_KEY: "left",
+            self.SET_RIGHT_ANCHOR_CONFIG_KEY: "right",
+        }
+        axis = axis_map.get(key)
+        if axis is None:
+            return
+        self._anchor_calibration_axis = axis
+        self._set_calibration_mode(True)
+
+    def _get_anchor_distance_from_click(
+        self,
+        axis: str,
+        center: tuple[float, float],
+        click: tuple[int, int],
+    ) -> int | None:
+        cx, cy = center
+        x, y = click
+        if axis == "up":
+            distance = cy - y
+        elif axis == "down":
+            distance = y - cy
+        elif axis == "left":
+            distance = cx - x
+        elif axis == "right":
+            distance = x - cx
+        else:
+            return None
+        if distance <= 0:
+            return None
+        return int(distance)
+
+    def _get_anchor_config_key(self, axis: str) -> str:
+        return {
+            "up": self.UP_DIST_CONFIG_KEY,
+            "down": self.DOWN_DIST_CONFIG_KEY,
+            "left": self.LEFT_DIST_CONFIG_KEY,
+            "right": self.RIGHT_DIST_CONFIG_KEY,
+        }[axis]
+
+    def get_anchor_overlay_data(self) -> dict[str, object] | None:
+        anchors = self._get_anchor_distances()
+        if anchors is None:
+            return None
+        center = self._get_window_center()
+        up_dist, down_dist, left_dist, right_dist = anchors
+        cx, cy = center
+        anchor_points = {
+            "up": (cx, cy - up_dist),
+            "down": (cx, cy + down_dist),
+            "left": (cx - left_dist, cy),
+            "right": (cx + right_dist, cy),
+        }
+        boundary_points = self._get_anchor_boundary_points(center, anchors)
+        return {
+            "center": center,
+            "anchors": anchor_points,
+            "boundary": boundary_points,
+        }
+
+    def _get_anchor_boundary_points(
+        self,
+        center: tuple[float, float],
+        anchors: tuple[int, int, int, int],
+        segments: int = 120,
+    ) -> list[tuple[float, float]]:
+        cx, cy = center
+        up_dist, down_dist, left_dist, right_dist = anchors
+        points: list[tuple[float, float]] = []
+        for i in range(segments + 1):
+            angle = (i / segments) * 2 * math.pi
+            degrees = math.degrees(angle) % 360
+            if degrees <= 90:
+                t = degrees / 90
+                radius = right_dist + (down_dist - right_dist) * t
+            elif degrees <= 180:
+                t = (degrees - 90) / 90
+                radius = down_dist + (left_dist - down_dist) * t
+            elif degrees <= 270:
+                t = (degrees - 180) / 90
+                radius = left_dist + (up_dist - left_dist) * t
+            else:
+                t = (degrees - 270) / 90
+                radius = up_dist + (right_dist - up_dist) * t
+            points.append((cx + math.cos(angle) * radius, cy + math.sin(angle) * radius))
+        return points
+
+    def _sanitize_deadzone(self, raw_value: object) -> float | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return min(max(value, self.DEADZONE_MIN), self.DEADZONE_MAX)
+
+    def _get_deadzone(self) -> float:
+        raw_value = self.get_config_value(self.DEADZONE_CONFIG_KEY)
+        deadzone = self._sanitize_deadzone(raw_value)
+        return deadzone if deadzone is not None else self.DEADZONE_DEFAULT
+
+    def _sync_deadzone_inputs(self) -> None:
+        deadzone = self._get_deadzone()
+        self.set_config_value(self.DEADZONE_INPUT_CONFIG_KEY, f"{deadzone:.2f}")
+
+    def _on_apply_deadzone_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_deadzone = self.get_config_value(self.DEADZONE_INPUT_CONFIG_KEY)
+        deadzone = self._sanitize_deadzone(raw_deadzone)
+        if deadzone is None:
+            return
+        self.set_config_value(self.DEADZONE_CONFIG_KEY, deadzone)
+        self._sync_deadzone_inputs()
