@@ -434,9 +434,11 @@ class TransparentWindow(Adw.Window):
         self.circle_overlay = CircleOverlay()
         self.circle_overlay.set_can_target(False)  # Ignore mouse events
         overlay.add_overlay(self.circle_overlay)
+        overlay.set_overlay_pass_through(self.circle_overlay, True)
 
         self.right_click_overlay = RightClickToWalkOverlay()
         overlay.add_overlay(self.right_click_overlay)
+        overlay.set_overlay_pass_through(self.right_click_overlay, True)
 
         self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
