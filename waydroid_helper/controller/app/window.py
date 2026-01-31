@@ -444,6 +444,9 @@ class TransparentWindow(Adw.Window):
         # Set UI (mainly event controllers)
         self.setup_controllers()
 
+        # Load saved widget profile
+        self.menu_manager.load_current_profile(self.widget_factory)
+
         # Initial hint
         GLib.idle_add(self.show_notification, _("Edit Mode (F1: Switch Mode)"))
 
@@ -740,6 +743,7 @@ class TransparentWindow(Adw.Window):
         self.active_mask_layer.set_opacity(0.0)
 
     def _on_close_request(self, window):
+        self.menu_manager.save_current_profile()
         async def close():
             await self.close_server()
             await self.cleanup_scrcpy()
