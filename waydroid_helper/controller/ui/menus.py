@@ -34,6 +34,7 @@ class ContextMenuManager:
     """动态上下文菜单管理器"""
 
     DEFAULT_PROFILE_NAME = "Default"
+    CURRENT_PROFILE_STATE_NAME = "current_profile"
 
     def __init__(self, parent_window: "TransparentWindow"):
         self.parent_window: "TransparentWindow" = parent_window
@@ -263,20 +264,49 @@ class ContextMenuManager:
     def _profile_config_key(self) -> str:
         return "controller.widget_profiles.current"
 
+    def _current_profile_state_path(self) -> Path:
+        return Path(self._get_profiles_dir()) / f"{self.CURRENT_PROFILE_STATE_NAME}.json"
+
+    def _write_current_profile_state(self, profile_name: str) -> None:
+        state_path = self._current_profile_state_path()
+        payload = {"current_profile": profile_name}
+        temp_path = state_path.with_suffix(".tmp")
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            os.replace(temp_path, state_path)
+        except Exception as e:
+            logger.error(f"Failed to save profile state: {e}")
+
     def _load_current_profile(self) -> str:
+        state_path = self._current_profile_state_path()
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                profile = data.get("current_profile")
+                if isinstance(profile, str) and profile.strip():
+                    return profile
+            except Exception as e:
+                logger.error(f"Failed to read profile state: {e}")
+
         profile = self._config_manager.get_value(
             self._profile_config_key(), self.DEFAULT_PROFILE_NAME
         )
         if not isinstance(profile, str) or not profile.strip():
-            return self.DEFAULT_PROFILE_NAME
+            profile = self.DEFAULT_PROFILE_NAME
+        self._write_current_profile_state(profile)
         return profile
 
     def _set_current_profile(self, profile_name: str) -> None:
         self._current_profile = profile_name
         self._config_manager.set_value(self._profile_config_key(), profile_name)
+        self._write_current_profile_state(profile_name)
 
     def _normalize_profile_name(self, profile_name: str) -> str | None:
         cleaned = "".join(ch for ch in profile_name if ch not in "/\\").strip()
+        if cleaned == self.CURRENT_PROFILE_STATE_NAME:
+            return None
         return cleaned or None
 
     def _profile_path(self, profile_name: str) -> Path:
@@ -287,7 +317,7 @@ class ContextMenuManager:
         profile_names = {
             path.stem
             for path in profiles_dir.glob("*.json")
-            if path.is_file()
+            if path.is_file() and path.stem != self.CURRENT_PROFILE_STATE_NAME
         }
         profile_names.add(self.DEFAULT_PROFILE_NAME)
         return sorted(profile_names)
@@ -458,10 +488,15 @@ class ContextMenuManager:
                 logger.error(f"Failed to create widget: {e}")
                 continue
 
-    def _save_layout_to_path(self, file_path: str) -> None:
+    def _save_layout_to_path(
+        self, file_path: str, profile_name: str | None = None
+    ) -> None:
         """Save layout data to a file path."""
         try:
             layout_data = self._build_layout_data()
+            if profile_name:
+                layout_data["profile_name"] = profile_name
+                layout_data["updated_at"] = datetime.now().isoformat()
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(layout_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
@@ -485,7 +520,9 @@ class ContextMenuManager:
         profile_name = self._normalize_profile_name(self._current_profile)
         if not profile_name:
             return
-        self._save_layout_to_path(str(self._profile_path(profile_name)))
+        self._save_layout_to_path(
+            str(self._profile_path(profile_name)), profile_name=profile_name
+        )
 
     def load_current_profile(self, widget_factory: "WidgetFactory") -> None:
         """Load the active profile if it exists."""
@@ -524,7 +561,9 @@ class ContextMenuManager:
         if not normalized:
             self.parent_window.show_notification(_("Profile name cannot be empty"))
             return
-        self._save_layout_to_path(str(self._profile_path(normalized)))
+        self._save_layout_to_path(
+            str(self._profile_path(normalized)), profile_name=normalized
+        )
         self._set_current_profile(normalized)
         self.parent_window.show_notification(_("Profile updated"))
 
@@ -537,7 +576,7 @@ class ContextMenuManager:
         if profile_path.exists():
             self.parent_window.show_notification(_("Profile already exists"))
             return
-        self._save_layout_to_path(str(profile_path))
+        self._save_layout_to_path(str(profile_path), profile_name=normalized)
         self._set_current_profile(normalized)
         self.parent_window.show_notification(
             _("Profile created: %s") % normalized
