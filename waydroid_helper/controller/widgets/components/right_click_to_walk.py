@@ -21,6 +21,7 @@ from waydroid_helper.controller.core.handler.event_handlers import InputEvent
 from waydroid_helper.controller.widgets.base.base_widget import BaseWidget
 from waydroid_helper.controller.widgets.decorators import (Resizable,
                                                            ResizableDecorator)
+from waydroid_helper.controller.widgets.config import create_action_config, create_text_config
 
 class JoystickState(Enum):
     """摇杆状态枚举"""
@@ -35,11 +36,16 @@ class RightClickToWalk(BaseWidget):
 
     MAPPING_MODE_WIDTH = 30
     MAPPING_MODE_HEIGHT = 30
+    SETTINGS_PANEL_AUTO_HIDE = False
     WIDGET_NAME = pgettext("Controller Widgets", "Right Click to Walk")
     WIDGET_DESCRIPTION = pgettext(
         "Controller Widgets",
         "Add to the game's movement wheel: hold and drag to steer, single-click to auto-walk to cursor. Ideal for MOBAs.",
     )
+    CENTER_X_CONFIG_KEY = "calibrated_center_x"
+    CENTER_Y_CONFIG_KEY = "calibrated_center_y"
+    CALIBRATE_CENTER_CONFIG_KEY = "calibrate_center"
+    RESET_CENTER_CONFIG_KEY = "reset_center"
 
     def __init__(
         self,
@@ -105,6 +111,14 @@ class RightClickToWalk(BaseWidget):
         self._mouse_distance_from_center: float = 0.0
 
         self.screen_info = ScreenInfo()
+        self._calibration_mode: bool = False
+
+        self.setup_config()
+        self.event_bus.subscribe(
+            event_type=EventType.MASK_CLICKED,
+            handler=self._on_mask_clicked,
+            subscriber=self,
+        )
 
     def draw_widget_content(self, cr: "Context[Surface]", width: int, height: int):
         """绘制组件的具体内容 - 圆形背景，上下左右箭头，中心鼠标图标"""
@@ -506,6 +520,9 @@ class RightClickToWalk(BaseWidget):
 
     def _get_window_center(self) -> tuple[float, float]:
         """获取窗口中心坐标"""
+        calibrated = self._get_calibrated_center()
+        if calibrated is not None:
+            return calibrated
         w, h = self.screen_info.get_host_resolution()
         return (w / 2, h / 2)
 
@@ -671,6 +688,103 @@ class RightClickToWalk(BaseWidget):
                 self._start_hold_timer()
 
         return True
+
+    def setup_config(self) -> None:
+        """设置右键行走的配置项"""
+        calibrate_center_config = create_action_config(
+            key=self.CALIBRATE_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Calibration"),
+            button_label=pgettext("Controller Widgets", "Calibrate"),
+            description=pgettext(
+                "Controller Widgets",
+                "Click to enter calibration mode, then click the character position on screen.",
+            ),
+        )
+        reset_center_config = create_action_config(
+            key=self.RESET_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Center"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear the calibrated center and return to the screen center.",
+            ),
+        )
+        center_x_config = create_text_config(
+            key=self.CENTER_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored calibration center X coordinate."
+            ),
+            visible=False,
+        )
+        center_y_config = create_text_config(
+            key=self.CENTER_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored calibration center Y coordinate."
+            ),
+            visible=False,
+        )
+
+        self.add_config_item(calibrate_center_config)
+        self.add_config_item(reset_center_config)
+        self.add_config_item(center_x_config)
+        self.add_config_item(center_y_config)
+
+        self.add_config_change_callback(
+            self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_CENTER_CONFIG_KEY, self._on_reset_center_clicked
+        )
+
+    def _on_calibrate_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._calibration_mode = True
+
+    def _on_reset_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._calibration_mode = False
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
+
+    def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
+        if not self._calibration_mode:
+            return
+        data = event.data or {}
+        x = data.get("x")
+        y = data.get("y")
+        if x is None or y is None:
+            return
+        w, h = self._get_window_size()
+        if x < 0 or y < 0 or x > w or y > h:
+            return
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._calibration_mode = False
+
+    def _get_calibrated_center(self) -> tuple[float, float] | None:
+        raw_x = self.get_config_value(self.CENTER_X_CONFIG_KEY)
+        raw_y = self.get_config_value(self.CENTER_Y_CONFIG_KEY)
+        if raw_x in (None, "") or raw_y in (None, ""):
+            return None
+        try:
+            x = float(raw_x)
+            y = float(raw_y)
+        except (TypeError, ValueError):
+            return None
+        w, h = self._get_window_size()
+        if not (0 <= x <= w and 0 <= y <= h):
+            return None
+        return (x, y)
 
     @property
     def mapping_start_x(self):
