@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from cairo import Context, Surface
     from gi.repository import Gtk
 
-from gi.repository import GLib, Gdk
+from gi.repository import GLib, Gdk, Gtk
 
 from waydroid_helper.controller.android.input import (AMotionEventAction,
                                                       AMotionEventButtons)
@@ -21,7 +21,11 @@ from waydroid_helper.controller.core.handler.event_handlers import InputEvent
 from waydroid_helper.controller.widgets.base.base_widget import BaseWidget
 from waydroid_helper.controller.widgets.decorators import (Resizable,
                                                            ResizableDecorator)
-from waydroid_helper.controller.widgets.config import create_action_config, create_text_config
+from waydroid_helper.controller.widgets.config import (
+    create_action_config,
+    create_switch_config,
+    create_text_config,
+)
 
 class JoystickState(Enum):
     """摇杆状态枚举"""
@@ -37,6 +41,9 @@ class RightClickToWalk(BaseWidget):
     MAPPING_MODE_WIDTH = 30
     MAPPING_MODE_HEIGHT = 30
     SETTINGS_PANEL_AUTO_HIDE = False
+    SETTINGS_PANEL_MIN_WIDTH = 380
+    SETTINGS_PANEL_MIN_HEIGHT = 420
+    SETTINGS_PANEL_MAX_HEIGHT = 650
     WIDGET_NAME = pgettext("Controller Widgets", "Right Click to Walk")
     WIDGET_DESCRIPTION = pgettext(
         "Controller Widgets",
@@ -49,6 +56,7 @@ class RightClickToWalk(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "calibrate_center"
     RESET_CENTER_CONFIG_KEY = "reset_center"
     APPLY_CENTER_CONFIG_KEY = "apply_center"
+    GAIN_ENABLED_CONFIG_KEY = "gain_enabled"
     X_GAIN_CONFIG_KEY = "x_gain"
     Y_GAIN_CONFIG_KEY = "y_gain"
     X_GAIN_INPUT_CONFIG_KEY = "x_gain_input"
@@ -800,6 +808,15 @@ class RightClickToWalk(BaseWidget):
                 "Controller Widgets", "Apply the manual center coordinates."
             ),
         )
+        gain_enabled_config = create_switch_config(
+            key=self.GAIN_ENABLED_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Enable Ellipse Correction"),
+            value=True,
+            description=pgettext(
+                "Controller Widgets",
+                "Enable gain-based correction for non-circular movement inputs.",
+            ),
+        )
         x_gain_config = create_text_config(
             key=self.X_GAIN_CONFIG_KEY,
             label=pgettext("Controller Widgets", "X Gain"),
@@ -858,6 +875,7 @@ class RightClickToWalk(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(apply_center_config)
+        self.add_config_item(gain_enabled_config)
         self.add_config_item(x_gain_config)
         self.add_config_item(y_gain_config)
         self.add_config_item(x_gain_input_config)
@@ -875,6 +893,9 @@ class RightClickToWalk(BaseWidget):
             self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
         )
         self.add_config_change_callback(
+            self.GAIN_ENABLED_CONFIG_KEY, self._on_gain_enabled_changed
+        )
+        self.add_config_change_callback(
             self.APPLY_GAIN_CONFIG_KEY, self._on_apply_gain_clicked
         )
         self.add_config_change_callback(
@@ -882,6 +903,7 @@ class RightClickToWalk(BaseWidget):
         )
         self._sync_center_inputs()
         self._sync_gain_inputs()
+        self._set_gain_controls_visible(self._is_gain_enabled())
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
@@ -890,6 +912,112 @@ class RightClickToWalk(BaseWidget):
                 self._emit_overlay_event("refresh"),
             ),
         )
+
+    def create_settings_panel(self) -> Gtk.Widget:
+        config_manager = self.get_config_manager()
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        panel.set_margin_top(6)
+        panel.set_margin_bottom(6)
+        panel.set_margin_start(6)
+        panel.set_margin_end(6)
+
+        intro = Gtk.Label(
+            label=pgettext(
+                "Controller Widgets",
+                "Configure center calibration and optional ellipse correction.",
+            ),
+            xalign=0,
+        )
+        intro.set_wrap(True)
+        panel.append(intro)
+
+        def add_missing_label(section: Gtk.Box, key: str) -> None:
+            label = Gtk.Label(
+                label=pgettext(
+                    "Controller Widgets", "Unable to load setting: {key}"
+                ).format(key=key),
+                xalign=0,
+            )
+            label.set_wrap(True)
+            section.append(label)
+
+        def build_section(
+            title: str,
+            keys: list[str],
+            description: str | None = None,
+            expanded: bool = True,
+            extra_widgets: list[Gtk.Widget] | None = None,
+        ) -> Gtk.Expander:
+            expander = Gtk.Expander(label=title)
+            expander.set_expanded(expanded)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            if description:
+                desc_label = Gtk.Label(label=description, xalign=0)
+                desc_label.set_wrap(True)
+                box.append(desc_label)
+            for key in keys:
+                widget = config_manager.create_ui_widget_for_key(key)
+                if widget is None:
+                    add_missing_label(box, key)
+                else:
+                    box.append(widget)
+            if extra_widgets:
+                for widget in extra_widgets:
+                    box.append(widget)
+            expander.set_child(box)
+            return expander
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Center Calibration"),
+                [
+                    self.CALIBRATE_CENTER_CONFIG_KEY,
+                    self.RESET_CENTER_CONFIG_KEY,
+                    self.CENTER_X_INPUT_CONFIG_KEY,
+                    self.CENTER_Y_INPUT_CONFIG_KEY,
+                    self.APPLY_CENTER_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Calibrate by clicking the character position on screen, or enter pixel coordinates manually.",
+                ),
+                expanded=True,
+            )
+        )
+
+        tune_hint = Gtk.Label(
+            label=pgettext(
+                "Controller Widgets",
+                "Tuning overlay is available while in Mapping mode.",
+            ),
+            xalign=0,
+        )
+        tune_hint.set_wrap(True)
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Direction Mapping"),
+                [
+                    self.GAIN_ENABLED_CONFIG_KEY,
+                    self.X_GAIN_INPUT_CONFIG_KEY,
+                    self.Y_GAIN_INPUT_CONFIG_KEY,
+                    self.APPLY_GAIN_CONFIG_KEY,
+                    self.TUNE_ANGLE_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Use ellipse correction gains to compensate for uneven movement wheels.",
+                ),
+                expanded=True,
+                extra_widgets=[tune_hint],
+            )
+        )
+
+        tune_widget = config_manager.ui_widgets.get(self.TUNE_ANGLE_CONFIG_KEY)
+        if tune_widget is not None:
+            tune_widget.set_sensitive(self.mapping_mode)
+
+        return panel
 
     def _on_calibrate_center_clicked(
         self, key: str, value: bool, restoring: bool
@@ -932,10 +1060,23 @@ class RightClickToWalk(BaseWidget):
         self._sync_center_inputs()
         self._emit_overlay_event("refresh")
 
+    def _on_gain_enabled_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        enabled = self._is_gain_enabled()
+        self._set_gain_controls_visible(enabled)
+        if not enabled:
+            self.cancel_tuning()
+        self._emit_overlay_event("refresh")
+
     def _on_apply_gain_clicked(
         self, key: str, value: bool, restoring: bool
     ) -> None:
         if restoring:
+            return
+        if not self._is_gain_enabled():
             return
         raw_x_gain = self.get_config_value(self.X_GAIN_INPUT_CONFIG_KEY)
         raw_y_gain = self.get_config_value(self.Y_GAIN_INPUT_CONFIG_KEY)
@@ -951,7 +1092,7 @@ class RightClickToWalk(BaseWidget):
     def _on_tune_angle_clicked(
         self, key: str, value: bool, restoring: bool
     ) -> None:
-        if restoring or not self.mapping_mode:
+        if restoring or not self.mapping_mode or not self._is_gain_enabled():
             return
         if self._tuning_mode:
             return
@@ -999,9 +1140,19 @@ class RightClickToWalk(BaseWidget):
         self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
 
     def _sync_gain_inputs(self) -> None:
-        x_gain, y_gain = self._get_gains()
+        x_gain, y_gain = self._get_saved_gains()
         self.set_config_value(self.X_GAIN_INPUT_CONFIG_KEY, f"{x_gain:.2f}")
         self.set_config_value(self.Y_GAIN_INPUT_CONFIG_KEY, f"{y_gain:.2f}")
+
+    def _set_gain_controls_visible(self, enabled: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.X_GAIN_INPUT_CONFIG_KEY,
+            self.Y_GAIN_INPUT_CONFIG_KEY,
+            self.APPLY_GAIN_CONFIG_KEY,
+            self.TUNE_ANGLE_CONFIG_KEY,
+        ):
+            manager.set_visible(key, enabled)
 
     def _set_calibration_mode(self, active: bool) -> None:
         self._calibration_mode = active
@@ -1040,7 +1191,17 @@ class RightClickToWalk(BaseWidget):
             return None
         return min(max(value, self.GAIN_MIN), self.GAIN_MAX)
 
-    def _get_gains(self) -> tuple[float, float]:
+    def _is_gain_enabled(self) -> bool:
+        raw = self.get_config_value(self.GAIN_ENABLED_CONFIG_KEY)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return True
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+
+    def _get_saved_gains(self) -> tuple[float, float]:
         raw_x = self.get_config_value(self.X_GAIN_CONFIG_KEY)
         raw_y = self.get_config_value(self.Y_GAIN_CONFIG_KEY)
         x_gain = self._sanitize_gain_value(raw_x)
@@ -1049,6 +1210,12 @@ class RightClickToWalk(BaseWidget):
             x_gain if x_gain is not None else self.GAIN_DEFAULT,
             y_gain if y_gain is not None else self.GAIN_DEFAULT,
         )
+
+    def _get_gains(self) -> tuple[float, float]:
+        x_gain, y_gain = self._get_saved_gains()
+        if not self._is_gain_enabled():
+            return (self.GAIN_DEFAULT, self.GAIN_DEFAULT)
+        return (x_gain, y_gain)
 
     def _get_tuning_gains(self) -> tuple[float, float]:
         if self._tuning_mode and self._tuning_x_gain is not None and self._tuning_y_gain is not None:
