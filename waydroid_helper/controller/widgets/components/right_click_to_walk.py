@@ -1794,20 +1794,24 @@ class RightClickToWalk(BaseWidget):
             "right": (center_x + right, center_y),
         }
         points: list[tuple[float, float]] = []
-        angles = [0, 90, 180, 270, 360]
         radii = [right, down, left, up, right]
-        segments = 96
+        segments = 192
         for i in range(segments + 1):
             angle = 360 * i / segments
-            for idx in range(len(angles) - 1):
-                if angles[idx] <= angle <= angles[idx + 1]:
-                    t = (angle - angles[idx]) / (angles[idx + 1] - angles[idx])
-                    radius = radii[idx] + (radii[idx + 1] - radii[idx]) * t
-                    rad = math.radians(angle)
-                    x = center_x + math.cos(rad) * radius
-                    y = center_y + math.sin(rad) * radius
-                    points.append((x, y))
-                    break
+            if angle >= 360:
+                angle = 0
+            quadrant = int(angle // 90)
+            local_angle = angle - (quadrant * 90)
+            t = local_angle / 90
+            # Smooth cosine interpolation between anchor radii.
+            # This keeps exact anchor distances while providing C1 continuity
+            # (zero slope at 0/90/180/270 degrees) to avoid visible corners.
+            smooth_t = 0.5 - 0.5 * math.cos(math.pi * t)
+            radius = radii[quadrant] + (radii[quadrant + 1] - radii[quadrant]) * smooth_t
+            rad = math.radians(angle)
+            x = center_x + math.cos(rad) * radius
+            y = center_y + math.sin(rad) * radius
+            points.append((x, y))
         return {
             "center": center,
             "anchors": anchors,
