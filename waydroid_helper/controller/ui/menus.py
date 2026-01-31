@@ -311,9 +311,19 @@ class ContextMenuManager:
         widgets_data = []
         child = self.parent_window.fixed.get_first_child()
         while child:
-            x, y = child.x, child.y
-            width = child.width
-            height = child.height
+            if hasattr(child, "get_widget_bounds"):
+                x, y, width, height = child.get_widget_bounds()
+            else:
+                if hasattr(self.parent_window.fixed, "get_child_position"):
+                    x, y = self.parent_window.fixed.get_child_position(child)
+                else:
+                    x, y = child.x, child.y
+                width = child.get_allocated_width()
+                height = child.get_allocated_height()
+                if width <= 0:
+                    width = child.width
+                if height <= 0:
+                    height = child.height
             widget_type = type(child).__name__.lower()
 
             widget_data: dict[str, Any] = {
