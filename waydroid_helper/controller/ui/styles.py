@@ -29,6 +29,10 @@ CSS_TRANSPARENT = """
     font-size: 24px;
     font-weight: bold;
 }
+
+.calibration-mask {
+    background-color: rgba(0, 0, 0, 0.55);
+}
 """
 
 

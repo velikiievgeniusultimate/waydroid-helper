@@ -51,6 +51,7 @@ class EventType(str, Enum):
     ENTER_STARING = "enter-staring"  # 进入瞄准模式
     EXIT_STARING = "exit-staring"  # 退出瞄准模式
     SWIPEHOLD_RADIUS = "swipehold-radius"  # 滑动半径设置
+    RIGHT_CLICK_TO_WALK_OVERLAY = "right-click-to-walk-overlay"  # 右键行走校准覆盖层
 
 
 @dataclass
@@ -99,6 +100,11 @@ class GlobalEventEmitter(GObject.Object):
         EventType.ENTER_STARING: (GObject.SignalFlags.RUN_FIRST, None, (object, object)),
         EventType.EXIT_STARING: (GObject.SignalFlags.RUN_FIRST, None, (object, object)),
         EventType.SWIPEHOLD_RADIUS: (GObject.SignalFlags.RUN_FIRST, None, (object, object)),
+        EventType.RIGHT_CLICK_TO_WALK_OVERLAY: (
+            GObject.SignalFlags.RUN_FIRST,
+            None,
+            (object, object),
+        ),
     }
 
     def __new__(cls):
