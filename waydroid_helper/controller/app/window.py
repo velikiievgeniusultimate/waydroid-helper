@@ -194,6 +194,26 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         cr.arc(x, y, 10, 0, 2 * math.pi)
         cr.stroke()
 
+    def _draw_anchor_shape(self, cr, data: dict[str, object]) -> None:
+        contour = data.get("contour")
+        anchors = data.get("anchors")
+        if not contour or not anchors:
+            return
+        points = list(contour)
+        if not points:
+            return
+        cr.set_source_rgba(0.2, 0.9, 0.5, 0.8)
+        cr.set_line_width(2.0)
+        cr.move_to(points[0][0], points[0][1])
+        for x, y in points[1:]:
+            cr.line_to(x, y)
+        cr.stroke()
+
+        cr.set_source_rgba(1.0, 0.9, 0.2, 0.9)
+        for anchor in anchors.values():
+            cr.arc(anchor[0], anchor[1], 4, 0, 2 * math.pi)
+            cr.fill()
+
     def _draw_overlay(self, widget, cr, width, height, user_data):
         if not self.widgets:
             return
@@ -207,6 +227,11 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                 if center is None:
                     continue
                 self._draw_crosshair(cr, center[0], center[1])
+                get_anchor_overlay = getattr(center_widget, "get_anchor_overlay_data", None)
+                if callable(get_anchor_overlay):
+                    anchor_data = get_anchor_overlay()
+                    if anchor_data is not None:
+                        self._draw_anchor_shape(cr, anchor_data)
             return
 
         is_calibrating = False
@@ -525,14 +550,22 @@ class TransparentWindow(Adw.Window):
                 key_controller = Gtk.EventControllerKey.new()
 
                 def on_mask_key_press(_controller, keyval, keycode, state):
-                    if (
-                        keyval == Gdk.KEY_Escape
-                        and self.right_click_overlay.active_widget is not None
-                        and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
-                    ):
-                        cancel = getattr(self.right_click_overlay.active_widget, "cancel_calibration", None)
-                        if callable(cancel):
+                    if keyval == Gdk.KEY_Escape:
+                        widget_to_cancel = self.active_settings_widget
+                        if (
+                            self.right_click_overlay.active_widget is not None
+                            and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                        ):
+                            widget_to_cancel = self.right_click_overlay.active_widget
+                        if widget_to_cancel is None:
+                            return False
+                        cancel = getattr(widget_to_cancel, "cancel_calibration", None)
+                        if callable(cancel) and getattr(widget_to_cancel, "is_calibrating", False):
                             cancel()
+                            return True
+                        cancel_anchor_set = getattr(widget_to_cancel, "cancel_anchor_set", None)
+                        if callable(cancel_anchor_set):
+                            cancel_anchor_set()
                             return True
                     return False
 
@@ -1377,6 +1410,11 @@ class TransparentWindow(Adw.Window):
             cancel = getattr(self.right_click_overlay.active_widget, "cancel_calibration", None)
             if callable(cancel):
                 cancel()
+                return True
+        if keyval == Gdk.KEY_Escape and self.active_settings_widget is not None:
+            cancel_anchor_set = getattr(self.active_settings_widget, "cancel_anchor_set", None)
+            if callable(cancel_anchor_set):
+                cancel_anchor_set()
                 return True
 
         # Special keys: mode switching and debug functions - these are directly judged by original keyval
