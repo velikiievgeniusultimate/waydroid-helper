@@ -105,8 +105,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
 
     def register_widget(self, widget: object) -> None:
         self.widgets.add(widget)
-        if self.mapping_mode:
-            self.set_visible(True)
+        self.set_visible(bool(self.widgets))
         self.queue_draw()
 
     def unregister_widget(self, widget: object) -> None:
@@ -155,7 +154,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.active_widget = None
             self.tuning_widget = None
             self.cursor_position = None
-            self.set_visible(False)
+            self.set_visible(bool(self.widgets))
         else:
             self.set_visible(bool(self.widgets))
         self.queue_draw()
@@ -196,7 +195,18 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         cr.stroke()
 
     def _draw_overlay(self, widget, cr, width, height, user_data):
-        if not self.widgets or not self.mapping_mode:
+        if not self.widgets:
+            return
+
+        if not self.mapping_mode:
+            for center_widget in self.widgets:
+                get_center = getattr(center_widget, "get_effective_center", None)
+                if not callable(get_center):
+                    continue
+                center = get_center()
+                if center is None:
+                    continue
+                self._draw_crosshair(cr, center[0], center[1])
             return
 
         is_calibrating = False
@@ -212,15 +222,6 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.set_source_rgba(0, 0, 0, 0.45)
             cr.rectangle(0, 0, width, height)
             cr.fill()
-
-        for center_widget in self.widgets:
-            get_center = getattr(center_widget, "get_effective_center", None)
-            if not callable(get_center):
-                continue
-            center = get_center()
-            if center is None:
-                continue
-            self._draw_crosshair(cr, center[0], center[1])
 
         if not (self.active_widget and is_calibrating) and not tuning_active:
             return
