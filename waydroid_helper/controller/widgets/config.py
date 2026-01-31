@@ -27,6 +27,7 @@ class ConfigType(Enum):
     NUMBER = auto()
     SWITCH = auto()
     COLOR = auto()
+    ACTION = auto()
     TEXTAREA = auto()  # 新增多行文本类型
 
 
@@ -461,6 +462,40 @@ class TextAreaConfig(ConfigItem):
         return data
 
 
+@dataclass
+class ActionConfig(ConfigItem):
+    """按钮动作配置项"""
+    button_label: str = ""
+
+    def create_ui_widget(self, on_change_callback: Callable[[str, Any], None]) -> Gtk.Widget:
+        """创建按钮UI控件"""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+        label = Gtk.Label(label=self.label, xalign=0)
+        label.set_tooltip_text(self.description)
+        box.append(label)
+
+        button = Gtk.Button(label=self.button_label or self.label)
+        button.set_halign(Gtk.Align.END)
+        button.connect("clicked", lambda _btn: on_change_callback(self.key, True))
+
+        box.append(button)
+        box.set_visible(self.visible)
+        return box
+
+    def get_value_from_ui(self, widget: Gtk.Widget) -> Any:
+        """按钮不从UI中获取值"""
+        return self.value
+
+    def set_value_to_ui(self, widget: Gtk.Widget, value: Any) -> None:
+        """按钮无需同步值"""
+        return None
+
+    def validate(self, value: Any) -> bool:
+        """按钮动作始终有效"""
+        return True
+
+
 class ConfigManager(GObject.Object):
     """配置管理器，使用GObject信号机制"""
     
@@ -668,4 +703,21 @@ def create_textarea_config(
         description=description,
         max_length=max_length,
         event_bus=event_bus,
-    ) 
+    )
+
+
+def create_action_config(
+    key: str,
+    label: str,
+    button_label: str = "",
+    description: str = "",
+    visible: bool = True,
+) -> ActionConfig:
+    """创建按钮动作配置项"""
+    return ActionConfig(
+        key=key,
+        label=label,
+        button_label=button_label,
+        description=description,
+        visible=visible,
+    )
