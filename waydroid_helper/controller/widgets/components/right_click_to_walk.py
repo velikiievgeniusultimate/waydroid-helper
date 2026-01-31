@@ -44,8 +44,11 @@ class RightClickToWalk(BaseWidget):
     )
     CENTER_X_CONFIG_KEY = "calibrated_center_x"
     CENTER_Y_CONFIG_KEY = "calibrated_center_y"
+    CENTER_X_INPUT_CONFIG_KEY = "center_x_input"
+    CENTER_Y_INPUT_CONFIG_KEY = "center_y_input"
     CALIBRATE_CENTER_CONFIG_KEY = "calibrate_center"
     RESET_CENTER_CONFIG_KEY = "reset_center"
+    APPLY_CENTER_CONFIG_KEY = "apply_center"
 
     def __init__(
         self,
@@ -119,6 +122,7 @@ class RightClickToWalk(BaseWidget):
             handler=self._on_mask_clicked,
             subscriber=self,
         )
+        self._emit_overlay_event("register")
 
     def draw_widget_content(self, cr: "Context[Surface]", width: int, height: int):
         """绘制组件的具体内容 - 圆形背景，上下左右箭头，中心鼠标图标"""
@@ -727,11 +731,38 @@ class RightClickToWalk(BaseWidget):
             ),
             visible=False,
         )
+        center_x_input_config = create_text_config(
+            key=self.CENTER_X_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Manual center X coordinate in pixels."
+            ),
+        )
+        center_y_input_config = create_text_config(
+            key=self.CENTER_Y_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Manual center Y coordinate in pixels."
+            ),
+        )
+        apply_center_config = create_action_config(
+            key=self.APPLY_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Center"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Apply the manual center coordinates."
+            ),
+        )
 
         self.add_config_item(calibrate_center_config)
         self.add_config_item(reset_center_config)
         self.add_config_item(center_x_config)
         self.add_config_item(center_y_config)
+        self.add_config_item(center_x_input_config)
+        self.add_config_item(center_y_input_config)
+        self.add_config_item(apply_center_config)
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
@@ -739,22 +770,52 @@ class RightClickToWalk(BaseWidget):
         self.add_config_change_callback(
             self.RESET_CENTER_CONFIG_KEY, self._on_reset_center_clicked
         )
+        self.add_config_change_callback(
+            self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
+        )
+        self._sync_center_inputs()
+        self.get_config_manager().connect(
+            "confirmed",
+            lambda *_args: (self._sync_center_inputs(), self._emit_overlay_event("refresh")),
+        )
 
     def _on_calibrate_center_clicked(
         self, key: str, value: bool, restoring: bool
     ) -> None:
         if restoring:
             return
-        self._calibration_mode = True
+        self._set_calibration_mode(True)
 
     def _on_reset_center_clicked(
         self, key: str, value: bool, restoring: bool
     ) -> None:
         if restoring:
             return
-        self._calibration_mode = False
+        self._set_calibration_mode(False)
         self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
+        self._sync_center_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_apply_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_x = self.get_config_value(self.CENTER_X_INPUT_CONFIG_KEY)
+        raw_y = self.get_config_value(self.CENTER_Y_INPUT_CONFIG_KEY)
+        try:
+            x = float(raw_x)
+            y = float(raw_y)
+        except (TypeError, ValueError):
+            return
+        w, h = self._get_window_size()
+        if not (0 <= x < w and 0 <= y < h):
+            return
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._emit_overlay_event("refresh")
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
         if not self._calibration_mode:
@@ -765,11 +826,13 @@ class RightClickToWalk(BaseWidget):
         if x is None or y is None:
             return
         w, h = self._get_window_size()
-        if x < 0 or y < 0 or x > w or y > h:
+        if x < 0 or y < 0 or x >= w or y >= h:
             return
         self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
-        self._calibration_mode = False
+        self._sync_center_inputs()
+        self._set_calibration_mode(False)
+        self._emit_overlay_event("refresh")
 
     def _get_calibrated_center(self) -> tuple[float, float] | None:
         raw_x = self.get_config_value(self.CENTER_X_CONFIG_KEY)
@@ -782,9 +845,50 @@ class RightClickToWalk(BaseWidget):
         except (TypeError, ValueError):
             return None
         w, h = self._get_window_size()
-        if not (0 <= x <= w and 0 <= y <= h):
+        if not (0 <= x < w and 0 <= y < h):
             return None
         return (x, y)
+
+    def _sync_center_inputs(self) -> None:
+        calibrated = self._get_calibrated_center()
+        if calibrated is None:
+            self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, "")
+            self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, "")
+            return
+        self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(int(calibrated[0])))
+        self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
+
+    def _set_calibration_mode(self, active: bool) -> None:
+        self._calibration_mode = active
+        self._emit_overlay_event("start" if active else "stop")
+
+    def _emit_overlay_event(self, action: str) -> None:
+        self.event_bus.emit(
+            Event(
+                EventType.RIGHT_CLICK_TO_WALK_OVERLAY,
+                self,
+                {"action": action, "widget": self},
+            )
+        )
+
+    def get_effective_center(self) -> tuple[float, float]:
+        return self._get_window_center()
+
+    def get_calibrated_center(self) -> tuple[float, float] | None:
+        return self._get_calibrated_center()
+
+    @property
+    def is_calibrating(self) -> bool:
+        return self._calibration_mode
+
+    def cancel_calibration(self) -> None:
+        if not self._calibration_mode:
+            return
+        self._set_calibration_mode(False)
+
+    def on_delete(self):
+        self._emit_overlay_event("unregister")
+        super().on_delete()
 
     @property
     def mapping_start_x(self):

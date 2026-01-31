@@ -43,6 +43,8 @@ from waydroid_helper.util import AdbHelper, logger
 if TYPE_CHECKING:
     from waydroid_helper.controller.widgets.base import BaseWidget
 
+from cairo import FontSlant, FontWeight
+
 
 Adw.init()
 
@@ -87,6 +89,118 @@ class CircleOverlay(Gtk.DrawingArea):
         cr.fill()
 
 
+class RightClickToWalkOverlay(Gtk.DrawingArea):
+    """Overlay for right-click-to-walk calibration and center markers."""
+
+    def __init__(self):
+        super().__init__()
+        self.widgets: set[object] = set()
+        self.active_widget: object | None = None
+        self.cursor_position: tuple[int, int] | None = None
+        self.set_draw_func(self._draw_overlay, None)
+        self.set_can_target(False)
+        self.set_visible(False)
+
+    def register_widget(self, widget: object) -> None:
+        self.widgets.add(widget)
+        self.set_visible(True)
+        self.queue_draw()
+
+    def unregister_widget(self, widget: object) -> None:
+        if widget in self.widgets:
+            self.widgets.remove(widget)
+        if self.active_widget is widget:
+            self.active_widget = None
+        if not self.widgets:
+            self.set_visible(False)
+        self.queue_draw()
+
+    def set_active_widget(self, widget: object | None) -> None:
+        self.active_widget = widget
+        if widget is not None:
+            self.register_widget(widget)
+        self.queue_draw()
+
+    def update_cursor(self, position: tuple[int, int]) -> None:
+        self.cursor_position = position
+        if self.get_visible():
+            self.queue_draw()
+
+    def _draw_crosshair(self, cr, x: float, y: float) -> None:
+        cr.set_source_rgba(0.2, 0.8, 1.0, 0.9)
+        cr.set_line_width(1.5)
+        cr.move_to(x - 8, y)
+        cr.line_to(x + 8, y)
+        cr.stroke()
+        cr.move_to(x, y - 8)
+        cr.line_to(x, y + 8)
+        cr.stroke()
+        cr.set_source_rgba(0.2, 0.8, 1.0, 0.6)
+        cr.set_line_width(1.2)
+        cr.arc(x, y, 10, 0, 2 * math.pi)
+        cr.stroke()
+
+    def _draw_overlay(self, widget, cr, width, height, user_data):
+        if not self.widgets:
+            return
+
+        is_calibrating = False
+        if self.active_widget is not None:
+            is_calibrating = bool(getattr(self.active_widget, "is_calibrating", False))
+
+        if is_calibrating:
+            cr.set_source_rgba(0, 0, 0, 0.45)
+            cr.rectangle(0, 0, width, height)
+            cr.fill()
+
+        for center_widget in self.widgets:
+            get_center = getattr(center_widget, "get_effective_center", None)
+            if not callable(get_center):
+                continue
+            center = get_center()
+            if center is None:
+                continue
+            self._draw_crosshair(cr, center[0], center[1])
+
+        if not (self.active_widget and is_calibrating):
+            return
+
+        if self.cursor_position is not None:
+            cursor_x, cursor_y = self.cursor_position
+            cr.set_source_rgba(1.0, 0.7, 0.2, 0.9)
+            cr.arc(cursor_x, cursor_y, 6, 0, 2 * math.pi)
+            cr.stroke()
+
+        cursor_text = "Cursor: -,-"
+        if self.cursor_position is not None:
+            cursor_text = f"Cursor: {self.cursor_position[0]}, {self.cursor_position[1]}"
+
+        get_effective_center = getattr(self.active_widget, "get_effective_center", None)
+        center_text = "Center: -,-"
+        center = None
+        if callable(get_effective_center):
+            center = get_effective_center()
+            if center is not None:
+                center_text = f"Center: {int(center[0])}, {int(center[1])}"
+
+        get_stored_center = getattr(self.active_widget, "get_calibrated_center", None)
+        stored_center = get_stored_center() if callable(get_stored_center) else None
+        if stored_center is None and center is not None:
+            center_text = f"Center (default): {int(center[0])}, {int(center[1])}"
+        elif stored_center is not None:
+            center_text = f"Center (stored): {int(center[0])}, {int(center[1])}"
+
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
+        cr.set_font_size(14)
+        margin = 16
+        line_height = 18
+        cr.move_to(margin, margin + line_height)
+        cr.show_text(cursor_text)
+        cr.move_to(margin, margin + line_height * 2)
+        cr.show_text(center_text)
+
+
 class TransparentWindow(Adw.Window):
     """Transparent window"""
 
@@ -123,6 +237,7 @@ class TransparentWindow(Adw.Window):
 
         # Create main container (Overlay)
         overlay = Gtk.Overlay.new()
+        self.overlay = overlay
         self.set_content(overlay)
 
         self.fixed = Gtk.Fixed.new()
@@ -163,11 +278,29 @@ class TransparentWindow(Adw.Window):
             self._on_widget_selection_overlay,
             subscriber=self,
         )
+        self.event_bus.subscribe(
+            EventType.RIGHT_CLICK_TO_WALK_OVERLAY,
+            self._on_right_click_to_walk_overlay,
+            subscriber=self,
+        )
+        self.event_bus.subscribe(
+            EventType.DELETE_WIDGET,
+            self._on_widget_deleted,
+            subscriber=self,
+        )
 
         # Create circular drawing overlay
         self.circle_overlay = CircleOverlay()
         self.circle_overlay.set_can_target(False)  # Ignore mouse events
         overlay.add_overlay(self.circle_overlay)
+
+        self.right_click_overlay = RightClickToWalkOverlay()
+        overlay.add_overlay(self.right_click_overlay)
+
+        self.active_settings_popover: Gtk.Popover | None = None
+        self.active_settings_panel: Gtk.Widget | None = None
+        self.active_settings_widget: object | None = None
+        self.active_mask_layer: Gtk.Widget | None = None
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -225,6 +358,8 @@ class TransparentWindow(Adw.Window):
                 mask_layer.set_name("mask-layer")
                 mask_layer.set_visible(False)
                 mask_layer.set_cursor_from_name("default")
+                mask_layer.add_css_class("calibration-mask")
+                mask_layer.set_opacity(0.0)
 
                 # 设置遮罩层样式，确保它覆盖整个窗口并阻止事件
                 # mask_layer.set_css_classes(["modal-mask"])
@@ -256,6 +391,37 @@ class TransparentWindow(Adw.Window):
                 mask_layer.add_controller(click_controller)
                 controllers.append(click_controller)
 
+                motion_controller = Gtk.EventControllerMotion.new()
+
+                def on_mask_motion(_controller, x, y):
+                    if (
+                        self.right_click_overlay.active_widget is not None
+                        and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                    ):
+                        self.right_click_overlay.update_cursor((int(x), int(y)))
+
+                motion_controller.connect("motion", on_mask_motion)
+                mask_layer.add_controller(motion_controller)
+                controllers.append(motion_controller)
+
+                key_controller = Gtk.EventControllerKey.new()
+
+                def on_mask_key_press(_controller, keyval, keycode, state):
+                    if (
+                        keyval == Gdk.KEY_Escape
+                        and self.right_click_overlay.active_widget is not None
+                        and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                    ):
+                        cancel = getattr(self.right_click_overlay.active_widget, "cancel_calibration", None)
+                        if callable(cancel):
+                            cancel()
+                            return True
+                    return False
+
+                key_controller.connect("key-pressed", on_mask_key_press)
+                mask_layer.add_controller(key_controller)
+                controllers.append(key_controller)
+
                 def disable_window_controllers():
                     """临时禁用窗口级别的控制器"""
                     # 获取窗口的所有控制器
@@ -286,6 +452,7 @@ class TransparentWindow(Adw.Window):
                 overlay.add_overlay(mask_layer)
                 mask_layer.set_visible(True)
                 mask_layer.grab_focus()
+                self.active_mask_layer = mask_layer
 
                 # 设置弹出窗口关闭时的清理逻辑
                 async def on_popover_closed_with_mask(p):
@@ -295,6 +462,12 @@ class TransparentWindow(Adw.Window):
 
                     if mask_layer.get_parent():
                         overlay.remove_overlay(mask_layer)
+                    if self.active_mask_layer is mask_layer:
+                        self.active_mask_layer = None
+                    if self.active_settings_popover is p:
+                        self.active_settings_popover = None
+                        self.active_settings_panel = None
+                        self.active_settings_widget = None
 
                     # 清理UI引用
                     config_manager = widget.get_config_manager()
@@ -326,6 +499,10 @@ class TransparentWindow(Adw.Window):
                 config_manager.clear_ui_references()
                 p.unparent()
                 self.queue_draw()
+                if self.active_settings_popover is p:
+                    self.active_settings_popover = None
+                    self.active_settings_panel = None
+                    self.active_settings_widget = None
 
             popover.connect("closed", on_popover_closed)
 
@@ -334,6 +511,9 @@ class TransparentWindow(Adw.Window):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         main_box.set_size_request(250, -1)
         popover.set_child(main_box)
+        self.active_settings_popover = popover
+        self.active_settings_panel = main_box
+        self.active_settings_widget = widget
 
         title_label = Gtk.Label()
         title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
@@ -370,6 +550,49 @@ class TransparentWindow(Adw.Window):
         popover.set_position(Gtk.PositionType.BOTTOM)
 
         popover.popup()
+
+    def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
+        data = event.data or {}
+        action = data.get("action")
+        widget = data.get("widget")
+        if action == "register":
+            self.right_click_overlay.register_widget(widget)
+            return
+        if action == "unregister":
+            self.right_click_overlay.unregister_widget(widget)
+            return
+        if action == "start":
+            self.right_click_overlay.set_active_widget(widget)
+            self._set_settings_panel_visible(False, widget)
+            self._set_mask_dimmed(True)
+            return
+        if action == "stop":
+            if self.right_click_overlay.active_widget is widget:
+                self.right_click_overlay.set_active_widget(None)
+            self._set_settings_panel_visible(True, widget)
+            self._set_mask_dimmed(False)
+            return
+        if action == "refresh":
+            self.right_click_overlay.queue_draw()
+
+    def _on_widget_deleted(self, event: "Event[object]") -> None:
+        widget = event.source
+        self.right_click_overlay.unregister_widget(widget)
+
+    def _set_settings_panel_visible(self, visible: bool, widget: object | None) -> None:
+        if widget is None or self.active_settings_widget is not widget:
+            return
+        if self.active_settings_panel is not None:
+            self.active_settings_panel.set_visible(visible)
+        if self.active_settings_popover is not None:
+            self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
+            self.active_settings_popover.set_can_target(visible)
+
+    def _set_mask_dimmed(self, dimmed: bool) -> None:
+        if self.active_mask_layer is None:
+            return
+        # Dimming is handled by the overlay drawing layer.
+        self.active_mask_layer.set_opacity(0.0)
 
     def _on_close_request(self, window):
         async def close():
@@ -590,6 +813,12 @@ class TransparentWindow(Adw.Window):
 
     def on_window_mouse_motion(self, controller, x, y):
         """Window-level mouse motion event"""
+        if (
+            self.right_click_overlay.active_widget is not None
+            and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+        ):
+            self.right_click_overlay.update_cursor((int(x), int(y)))
+
         if self.current_mode == self.MAPPING_MODE:
             event = controller.get_current_event()
             state = event.get_modifier_state()
@@ -988,6 +1217,16 @@ class TransparentWindow(Adw.Window):
 
     def on_global_key_press(self, controller, keyval, keycode, state):
         """Global keyboard event - supports dual mode, uses event handler chain"""
+        if (
+            keyval == Gdk.KEY_Escape
+            and self.right_click_overlay.active_widget is not None
+            and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+        ):
+            cancel = getattr(self.right_click_overlay.active_widget, "cancel_calibration", None)
+            if callable(cancel):
+                cancel()
+                return True
+
         # Special keys: mode switching and debug functions - these are directly judged by original keyval
         if keyval == Gdk.KEY_F1:
             # F1 switches between two modes
