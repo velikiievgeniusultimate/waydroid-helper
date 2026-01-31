@@ -105,7 +105,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
 
     def register_widget(self, widget: object) -> None:
         self.widgets.add(widget)
-        if self.mapping_mode:
+        if not self.mapping_mode:
             self.set_visible(True)
         self.queue_draw()
 
@@ -121,7 +121,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.queue_draw()
 
     def set_active_widget(self, widget: object | None) -> None:
-        if not self.mapping_mode:
+        if self.mapping_mode:
             self.active_widget = None
             self.queue_draw()
             return
@@ -131,7 +131,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.queue_draw()
 
     def set_tuning_widget(self, widget: object | None) -> None:
-        if not self.mapping_mode:
+        if self.mapping_mode:
             self.tuning_widget = None
             self.queue_draw()
             return
@@ -144,7 +144,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         if self.mapping_mode == mapping_mode:
             return
         self.mapping_mode = mapping_mode
-        if not mapping_mode:
+        if mapping_mode:
             for widget in list(self.widgets):
                 cancel = getattr(widget, "cancel_calibration", None)
                 if callable(cancel):
@@ -166,7 +166,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.queue_draw()
 
     def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
-        if not self.mapping_mode or self.tuning_widget is None:
+        if self.mapping_mode or self.tuning_widget is None:
             return False
         handler = getattr(self.tuning_widget, "handle_tuning_key", None)
         if callable(handler):
@@ -176,7 +176,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
     @property
     def is_tuning_active(self) -> bool:
         return (
-            self.mapping_mode
+            not self.mapping_mode
             and self.tuning_widget is not None
             and bool(getattr(self.tuning_widget, "is_tuning", False))
         )
@@ -196,7 +196,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         cr.stroke()
 
     def _draw_overlay(self, widget, cr, width, height, user_data):
-        if not self.widgets or not self.mapping_mode:
+        if not self.widgets or self.mapping_mode:
             return
 
         is_calibrating = False
@@ -221,6 +221,9 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             if center is None:
                 continue
             self._draw_crosshair(cr, center[0], center[1])
+            anchor_data = getattr(center_widget, "get_anchor_overlay_data", None)
+            if callable(anchor_data):
+                self._draw_anchor_overlay(cr, anchor_data())
 
         if not (self.active_widget and is_calibrating) and not tuning_active:
             return
@@ -313,6 +316,30 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.show_text(f"Corrected angle: {corrected_angle_text}")
             cr.move_to(margin, margin + line_height * 3)
             cr.show_text(f"X Gain: {x_gain:.2f}  Y Gain: {y_gain:.2f}")
+
+    def _draw_anchor_overlay(self, cr, data: dict[str, object] | None) -> None:
+        if not data:
+            return
+        center = data.get("center")
+        anchors = data.get("anchors")
+        boundary = data.get("boundary")
+        if not center or not anchors or not boundary:
+            return
+        cr.set_source_rgba(0.2, 0.9, 0.6, 0.85)
+        cr.set_line_width(2)
+        first = True
+        for point in boundary:
+            if first:
+                cr.move_to(point[0], point[1])
+                first = False
+            else:
+                cr.line_to(point[0], point[1])
+        cr.stroke()
+
+        cr.set_source_rgba(0.1, 0.7, 1.0, 0.9)
+        for point in anchors.values():
+            cr.arc(point[0], point[1], 4, 0, 2 * math.pi)
+            cr.fill()
 
 
 class TransparentWindow(Adw.Window):
@@ -407,9 +434,11 @@ class TransparentWindow(Adw.Window):
         self.circle_overlay = CircleOverlay()
         self.circle_overlay.set_can_target(False)  # Ignore mouse events
         overlay.add_overlay(self.circle_overlay)
+        overlay.set_overlay_pass_through(self.circle_overlay, True)
 
         self.right_click_overlay = RightClickToWalkOverlay()
         overlay.add_overlay(self.right_click_overlay)
+        overlay.set_overlay_pass_through(self.right_click_overlay, True)
 
         self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
