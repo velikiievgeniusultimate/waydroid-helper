@@ -19,7 +19,6 @@ from gi.repository import Gdk, Gtk, GLib
 from waydroid_helper.controller.core.control_msg import ScreenInfo
 from waydroid_helper.controller.core.key_system import Key, KeyCombination, KeyRegistry
 from waydroid_helper.util.log import logger
-from waydroid_helper.compat_widget.file_dialog import FileDialog
 from waydroid_helper.controller.widgets.base import BaseWidget
 from waydroid_helper.config.file_manager import ConfigManager as FileConfigManager
 
@@ -190,8 +189,6 @@ class ContextMenuManager:
             (_("Refresh widgets"), lambda: self._refresh_widgets(widget_factory)),
             # (_("Show widget info"), lambda: self._show_widget_info(widget_factory)),
             (_("Clear all"), lambda: self._clear_all_widgets()),
-            (_("Save layout"), lambda: self._save_layout()),
-            (_("Load layout"), lambda: self._load_layout(widget_factory)),
             (_("Profiles"), lambda: self._show_profile_manager(widget_factory)),
         ]
 
@@ -255,16 +252,6 @@ class ContextMenuManager:
         return KeyCombination(keys) if keys else None
 
     # TODO 在每个 widget 内部单独实现序列化/反序列化
-    def _get_default_layouts_dir(self) -> str:
-        """获取默认的布局文件目录"""
-        # 使用 XDG 配置目录标准：~/.config/waydroid-helper/layouts/
-        config_dir = os.getenv("XDG_CONFIG_HOME", GLib.get_user_config_dir())
-        layouts_dir = os.path.join(config_dir, "waydroid-helper", "layouts")
-
-        # 确保目录存在
-        os.makedirs(layouts_dir, exist_ok=True)
-
-        return layouts_dir
 
     def _get_profiles_dir(self) -> str:
         """获取默认的配置文件目录"""
@@ -690,64 +677,3 @@ class ContextMenuManager:
 
         dialog.connect("response", on_dialog_close)
         dialog.show()
-
-    def _save_layout(self):
-        """保存当前布局到文件，包括屏幕尺寸信息"""
-        # 创建文件过滤器，只显示 JSON 文件
-        json_filter = Gtk.FileFilter()
-        json_filter.set_name(_("JSON files"))
-        json_filter.add_pattern("*.json")
-
-        # 创建文件对话框
-        dialog = FileDialog(
-            parent=self.parent_window, title=_("Save Layout"), modal=True
-        )
-
-        # 设置默认目录
-        default_dir = self._get_default_layouts_dir()
-
-        # 显示保存对话框
-        dialog.save_file(
-            callback=self._on_save_layout_file_selected,
-            suggested_name="layout.json",
-            file_filter=json_filter,
-            initial_folder=default_dir,
-        )
-
-    def _on_save_layout_file_selected(self, success: bool, file_path: str | None):
-        """处理保存文件选择的回调"""
-        if not success or not file_path:
-            return
-        self._save_layout_to_path(file_path)
-
-    def _load_layout(self, widget_factory: "WidgetFactory"):
-        """从文件加载布局，支持屏幕尺寸缩放适配"""
-        # 创建文件过滤器，只显示 JSON 文件
-        json_filter = Gtk.FileFilter()
-        json_filter.set_name(_("JSON files"))
-        json_filter.add_pattern("*.json")
-
-        # 创建文件对话框
-        dialog = FileDialog(
-            parent=self.parent_window, title=_("Load Layout"), modal=True
-        )
-
-        # 设置默认目录
-        default_dir = self._get_default_layouts_dir()
-
-        # 显示打开对话框
-        dialog.open_file(
-            callback=lambda success, path: self._on_load_layout_file_selected(
-                success, path, widget_factory
-            ),
-            file_filter=json_filter,
-            initial_folder=default_dir,
-        )
-
-    def _on_load_layout_file_selected(
-        self, success: bool, file_path: str | None, widget_factory: "WidgetFactory"
-    ):
-        """处理加载文件选择的回调"""
-        if not success or not file_path:
-            return
-        self._load_layout_from_path(file_path, widget_factory)
