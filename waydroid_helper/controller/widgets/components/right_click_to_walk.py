@@ -97,6 +97,7 @@ class RightClickToWalk(BaseWidget):
     DIAG_UL_DY_INPUT_CONFIG_KEY = "diag_ul_dy_input"
     APPLY_DIAGONALS_CONFIG_KEY = "apply_diagonals"
     RESET_DIAGONALS_CONFIG_KEY = "reset_diagonals"
+    SHOW_DEBUG_BOUNDARY_CONFIG_KEY = "show_debug_boundary"
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
@@ -1207,6 +1208,15 @@ class RightClickToWalk(BaseWidget):
                 "Clear diagonal offsets and regenerate defaults.",
             ),
         )
+        show_debug_boundary_config = create_switch_config(
+            key=self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Show Debug Boundary (Edit Mode)"),
+            value=True,
+            description=pgettext(
+                "Controller Widgets",
+                "Show the boundary/center debug overlay while editing this widget.",
+            ),
+        )
 
         self.add_config_item(calibrate_center_config)
         self.add_config_item(reset_center_config)
@@ -1256,6 +1266,7 @@ class RightClickToWalk(BaseWidget):
         self.add_config_item(diag_ul_dy_input_config)
         self.add_config_item(apply_diagonals_config)
         self.add_config_item(reset_diagonals_config)
+        self.add_config_item(show_debug_boundary_config)
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
@@ -1301,6 +1312,9 @@ class RightClickToWalk(BaseWidget):
         )
         self.add_config_change_callback(
             self.RESET_DIAGONALS_CONFIG_KEY, self._on_reset_diagonals_clicked
+        )
+        self.add_config_change_callback(
+            self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
         )
         self._sync_center_inputs()
         self._sync_gain_inputs()
@@ -1474,6 +1488,18 @@ class RightClickToWalk(BaseWidget):
                 ),
                 expanded=False,
                 extra_widgets=[self._diag_warning_label],
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Debug Overlay"),
+                [self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Toggle the edit-mode boundary and center markers for this widget.",
+                ),
+                expanded=False,
             )
         )
 
@@ -1679,6 +1705,13 @@ class RightClickToWalk(BaseWidget):
         self._reset_diagonal_offsets()
         self._sync_diagonal_inputs()
         self._set_diagonal_warning("")
+        self._emit_overlay_event("refresh")
+
+    def _on_debug_boundary_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
         self._emit_overlay_event("refresh")
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
@@ -2128,6 +2161,16 @@ class RightClickToWalk(BaseWidget):
 
     def _is_gain_enabled(self) -> bool:
         raw = self.get_config_value(self.GAIN_ENABLED_CONFIG_KEY)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return True
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+
+    def is_debug_boundary_enabled(self) -> bool:
+        raw = self.get_config_value(self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY)
         if isinstance(raw, bool):
             return raw
         if raw is None:

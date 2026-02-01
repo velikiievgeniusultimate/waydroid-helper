@@ -324,6 +324,9 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
 
         if not self.mapping_mode:
             for center_widget in self.widgets:
+                get_debug = getattr(center_widget, "is_debug_boundary_enabled", None)
+                if callable(get_debug) and not get_debug():
+                    continue
                 get_center = getattr(center_widget, "get_effective_center", None)
                 if not callable(get_center):
                     continue

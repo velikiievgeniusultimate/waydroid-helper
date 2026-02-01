@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 from cairo import FONT_SLANT_NORMAL, FONT_WEIGHT_BOLD
 
+from gi.repository import Gdk, Gtk
+
 from waydroid_helper.controller.android.input import (AMotionEventAction,
                                                       AMotionEventButtons)
 from waydroid_helper.controller.core import (Event, EventType, KeyCombination,
@@ -30,9 +32,13 @@ from waydroid_helper.controller.core import (Event, EventType, KeyCombination,
 from waydroid_helper.controller.core.control_msg import InjectTouchEventMsg, ScreenInfo
 from waydroid_helper.controller.core.handler.event_handlers import InputEvent
 from waydroid_helper.controller.widgets.base.base_widget import BaseWidget
-from waydroid_helper.controller.widgets.config import (create_dropdown_config,
-                                                       create_slider_config,
-                                                       create_switch_config)
+from waydroid_helper.controller.widgets.config import (
+    create_action_config,
+    create_dropdown_config,
+    create_slider_config,
+    create_switch_config,
+    create_text_config,
+)
 from waydroid_helper.controller.widgets.decorators import (Editable, Resizable,
                                                            ResizableDecorator)
 
@@ -78,6 +84,69 @@ class SkillCasting(BaseWidget):
         "Controller Widgets",
         "Commonly used when using the characters' skills, click and cooperate with the mouse to release skills.",
     )
+    CENTER_X_CONFIG_KEY = "skill_calibrated_center_x"
+    CENTER_Y_CONFIG_KEY = "skill_calibrated_center_y"
+    CENTER_X_INPUT_CONFIG_KEY = "skill_center_x_input"
+    CENTER_Y_INPUT_CONFIG_KEY = "skill_center_y_input"
+    CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
+    RESET_CENTER_CONFIG_KEY = "skill_reset_center"
+    APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
+    GAIN_ENABLED_CONFIG_KEY = "skill_gain_enabled"
+    X_GAIN_CONFIG_KEY = "skill_x_gain"
+    Y_GAIN_CONFIG_KEY = "skill_y_gain"
+    X_GAIN_INPUT_CONFIG_KEY = "skill_x_gain_input"
+    Y_GAIN_INPUT_CONFIG_KEY = "skill_y_gain_input"
+    APPLY_GAIN_CONFIG_KEY = "skill_apply_gains"
+    TUNE_ANGLE_CONFIG_KEY = "skill_tune_angle"
+    ANCHOR_UP_CONFIG_KEY = "skill_anchor_up_dist_px"
+    ANCHOR_DOWN_CONFIG_KEY = "skill_anchor_down_dist_px"
+    ANCHOR_LEFT_CONFIG_KEY = "skill_anchor_left_dist_px"
+    ANCHOR_RIGHT_CONFIG_KEY = "skill_anchor_right_dist_px"
+    ANCHOR_UP_INPUT_CONFIG_KEY = "skill_anchor_up_input"
+    ANCHOR_DOWN_INPUT_CONFIG_KEY = "skill_anchor_down_input"
+    ANCHOR_LEFT_INPUT_CONFIG_KEY = "skill_anchor_left_input"
+    ANCHOR_RIGHT_INPUT_CONFIG_KEY = "skill_anchor_right_input"
+    APPLY_ANCHORS_CONFIG_KEY = "skill_apply_anchors"
+    RESET_ANCHORS_CONFIG_KEY = "skill_reset_anchors"
+    SET_ANCHOR_UP_CONFIG_KEY = "skill_set_anchor_up"
+    SET_ANCHOR_DOWN_CONFIG_KEY = "skill_set_anchor_down"
+    SET_ANCHOR_LEFT_CONFIG_KEY = "skill_set_anchor_left"
+    SET_ANCHOR_RIGHT_CONFIG_KEY = "skill_set_anchor_right"
+    CANCEL_ANCHOR_SET_CONFIG_KEY = "skill_cancel_anchor_set"
+    ANCHOR_DEADZONE_CONFIG_KEY = "skill_anchor_deadzone"
+    DIAG_UR_DX_CONFIG_KEY = "skill_diag_ur_dx"
+    DIAG_UR_DY_CONFIG_KEY = "skill_diag_ur_dy"
+    DIAG_DR_DX_CONFIG_KEY = "skill_diag_dr_dx"
+    DIAG_DR_DY_CONFIG_KEY = "skill_diag_dr_dy"
+    DIAG_DL_DX_CONFIG_KEY = "skill_diag_dl_dx"
+    DIAG_DL_DY_CONFIG_KEY = "skill_diag_dl_dy"
+    DIAG_UL_DX_CONFIG_KEY = "skill_diag_ul_dx"
+    DIAG_UL_DY_CONFIG_KEY = "skill_diag_ul_dy"
+    DIAG_UR_DX_INPUT_CONFIG_KEY = "skill_diag_ur_dx_input"
+    DIAG_UR_DY_INPUT_CONFIG_KEY = "skill_diag_ur_dy_input"
+    DIAG_DR_DX_INPUT_CONFIG_KEY = "skill_diag_dr_dx_input"
+    DIAG_DR_DY_INPUT_CONFIG_KEY = "skill_diag_dr_dy_input"
+    DIAG_DL_DX_INPUT_CONFIG_KEY = "skill_diag_dl_dx_input"
+    DIAG_DL_DY_INPUT_CONFIG_KEY = "skill_diag_dl_dy_input"
+    DIAG_UL_DX_INPUT_CONFIG_KEY = "skill_diag_ul_dx_input"
+    DIAG_UL_DY_INPUT_CONFIG_KEY = "skill_diag_ul_dy_input"
+    APPLY_DIAGONALS_CONFIG_KEY = "skill_apply_diagonals"
+    RESET_DIAGONALS_CONFIG_KEY = "skill_reset_diagonals"
+    SHOW_DEBUG_BOUNDARY_CONFIG_KEY = "skill_show_debug_boundary"
+    GAIN_DEFAULT = 1.0
+    GAIN_MIN = 0.5
+    GAIN_MAX = 2.0
+    ANCHOR_MAX_MULTIPLIER = 4
+    DEADZONE_DEFAULT = 0.1
+    DEADZONE_MAX = 0.95
+    DIAGONAL_DEFAULT_SCALE = 0.7
+    DIAGONAL_HANDLE_RADIUS = 12
+    DIAGONAL_QUADRANTS = {
+        "ur": (1, -1),
+        "dr": (1, 1),
+        "dl": (-1, 1),
+        "ul": (-1, -1),
+    }
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -174,6 +243,13 @@ class SkillCasting(BaseWidget):
         self._mouse_x: float = 0
         self._mouse_y: float = 0
 
+        self._calibration_mode: bool = False
+        self._tuning_mode: bool = False
+        self._tuning_x_gain: float | None = None
+        self._tuning_y_gain: float | None = None
+        self._anchor_set_mode: str | None = None
+        self._diag_warning_label: Gtk.Label | None = None
+
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
 
@@ -189,6 +265,11 @@ class SkillCasting(BaseWidget):
         # 订阅事件总线
         self.event_bus.subscribe(EventType.MOUSE_MOTION, self._on_mouse_motion, subscriber=self)
         self.event_bus.subscribe(EventType.CANCEL_CASTING, self._on_cancel_casting, subscriber=self)
+        self.event_bus.subscribe(
+            event_type=EventType.MASK_CLICKED,
+            handler=self._on_mask_clicked,
+            subscriber=self,
+        )
 
         # # 测试：监听取消按钮销毁事件
         # event_bus.subscribe(
@@ -199,6 +280,7 @@ class SkillCasting(BaseWidget):
         #     subscriber=self,
         # )
         self.screen_info = ScreenInfo()
+        self._emit_overlay_event("register")
 
     def _start_event_processor(self):
         """启动异步事件处理器"""
@@ -481,8 +563,6 @@ class SkillCasting(BaseWidget):
 
     def setup_config(self) -> None:
         """设置配置项"""
-
-        # 添加圆半径配置
         circle_radius_config = create_slider_config(
             key="circle_radius",
             label=pgettext("Controller Widgets", "Casting Radius"),
@@ -495,8 +575,6 @@ class SkillCasting(BaseWidget):
                 "Fine-tune according to the casting range of different skills",
             ),
         )
-
-        # 添加施法时机配置
         cast_timing_config = create_dropdown_config(
             key="cast_timing",
             label=pgettext("Controller Widgets", "Cast Timing"),
@@ -518,18 +596,551 @@ class SkillCasting(BaseWidget):
                 "Determines when the skill casting ends: On Release (default), Immediate (auto-release after moving), or Manual (sticky mode)",
             ),
         )
-
-        # 添加取消施法按钮配置
+        calibrate_center_config = create_action_config(
+            key=self.CALIBRATE_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Calibration"),
+            button_label=pgettext("Controller Widgets", "Calibrate"),
+            description=pgettext(
+                "Controller Widgets",
+                "Click to enter calibration mode, then click the character position on screen.",
+            ),
+        )
+        reset_center_config = create_action_config(
+            key=self.RESET_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Center"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear the calibrated center and return to the screen center.",
+            ),
+        )
+        center_x_config = create_text_config(
+            key=self.CENTER_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored calibration center X coordinate."
+            ),
+            visible=False,
+        )
+        center_y_config = create_text_config(
+            key=self.CENTER_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored calibration center Y coordinate."
+            ),
+            visible=False,
+        )
+        center_x_input_config = create_text_config(
+            key=self.CENTER_X_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Manual center X coordinate in pixels."
+            ),
+        )
+        center_y_input_config = create_text_config(
+            key=self.CENTER_Y_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Center Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Manual center Y coordinate in pixels."
+            ),
+        )
+        apply_center_config = create_action_config(
+            key=self.APPLY_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Center"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Apply the manual center coordinates."
+            ),
+        )
+        gain_enabled_config = create_switch_config(
+            key=self.GAIN_ENABLED_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Enable Ellipse Correction"),
+            value=True,
+            description=pgettext(
+                "Controller Widgets",
+                "Enable gain-based correction for non-circular movement inputs.",
+            ),
+        )
+        x_gain_config = create_text_config(
+            key=self.X_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "X Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Persisted X gain for ellipse correction."
+            ),
+            visible=False,
+        )
+        y_gain_config = create_text_config(
+            key=self.Y_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Y Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Persisted Y gain for ellipse correction."
+            ),
+            visible=False,
+        )
+        x_gain_input_config = create_text_config(
+            key=self.X_GAIN_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "X Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Ellipse correction gain for X axis (0.5–2.0)."
+            ),
+        )
+        y_gain_input_config = create_text_config(
+            key=self.Y_GAIN_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Y Gain"),
+            value=str(self.GAIN_DEFAULT),
+            description=pgettext(
+                "Controller Widgets", "Ellipse correction gain for Y axis (0.5–2.0)."
+            ),
+        )
+        apply_gain_config = create_action_config(
+            key=self.APPLY_GAIN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Gains"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Validate and apply ellipse correction gains."
+            ),
+        )
+        tune_angle_config = create_action_config(
+            key=self.TUNE_ANGLE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Tune Angle"),
+            button_label=pgettext("Controller Widgets", "Tune"),
+            description=pgettext(
+                "Controller Widgets", "Live tuning overlay for ellipse correction."
+            ),
+        )
+        anchor_up_config = create_text_config(
+            key=self.ANCHOR_UP_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Up Anchor Distance"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored upward anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        anchor_down_config = create_text_config(
+            key=self.ANCHOR_DOWN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Down Anchor Distance"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored downward anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        anchor_left_config = create_text_config(
+            key=self.ANCHOR_LEFT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Left Anchor Distance"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored leftward anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        anchor_right_config = create_text_config(
+            key=self.ANCHOR_RIGHT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Right Anchor Distance"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored rightward anchor distance in pixels."
+            ),
+            visible=False,
+        )
+        anchor_up_input_config = create_text_config(
+            key=self.ANCHOR_UP_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Up Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Distance from center to the upper anchor."
+            ),
+        )
+        anchor_down_input_config = create_text_config(
+            key=self.ANCHOR_DOWN_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Down Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Distance from center to the lower anchor."
+            ),
+        )
+        anchor_left_input_config = create_text_config(
+            key=self.ANCHOR_LEFT_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Left Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Distance from center to the left anchor."
+            ),
+        )
+        anchor_right_input_config = create_text_config(
+            key=self.ANCHOR_RIGHT_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Right Distance (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Distance from center to the right anchor."
+            ),
+        )
+        apply_anchors_config = create_action_config(
+            key=self.APPLY_ANCHORS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Anchors"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets",
+                "Validate and apply the four anchor distances.",
+            ),
+        )
+        reset_anchors_config = create_action_config(
+            key=self.RESET_ANCHORS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Anchors"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear all calibrated anchor distances.",
+            ),
+        )
+        set_anchor_up_config = create_action_config(
+            key=self.SET_ANCHOR_UP_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Up"),
+            button_label=pgettext("Controller Widgets", "Set Up"),
+            description=pgettext(
+                "Controller Widgets", "Click the upper boundary on the screen."
+            ),
+        )
+        set_anchor_down_config = create_action_config(
+            key=self.SET_ANCHOR_DOWN_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Down"),
+            button_label=pgettext("Controller Widgets", "Set Down"),
+            description=pgettext(
+                "Controller Widgets", "Click the lower boundary on the screen."
+            ),
+        )
+        set_anchor_left_config = create_action_config(
+            key=self.SET_ANCHOR_LEFT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Left"),
+            button_label=pgettext("Controller Widgets", "Set Left"),
+            description=pgettext(
+                "Controller Widgets", "Click the left boundary on the screen."
+            ),
+        )
+        set_anchor_right_config = create_action_config(
+            key=self.SET_ANCHOR_RIGHT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Set Right"),
+            button_label=pgettext("Controller Widgets", "Set Right"),
+            description=pgettext(
+                "Controller Widgets", "Click the right boundary on the screen."
+            ),
+        )
+        cancel_anchor_set_config = create_action_config(
+            key=self.CANCEL_ANCHOR_SET_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Cancel Anchor Set"),
+            button_label=pgettext("Controller Widgets", "Cancel"),
+            description=pgettext(
+                "Controller Widgets", "Exit anchor capture mode without saving."
+            ),
+        )
+        anchor_deadzone_config = create_text_config(
+            key=self.ANCHOR_DEADZONE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Deadzone (0-1)"),
+            value=f"{self.DEADZONE_DEFAULT:.2f}",
+            description=pgettext(
+                "Controller Widgets",
+                "Normalized deadzone before movement begins (0.0–1.0).",
+            ),
+        )
+        diag_ur_dx_config = create_text_config(
+            key=self.DIAG_UR_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UR X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-right X offset."
+            ),
+            visible=False,
+        )
+        diag_ur_dy_config = create_text_config(
+            key=self.DIAG_UR_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UR Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-right Y offset."
+            ),
+            visible=False,
+        )
+        diag_dr_dx_config = create_text_config(
+            key=self.DIAG_DR_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DR X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-right X offset."
+            ),
+            visible=False,
+        )
+        diag_dr_dy_config = create_text_config(
+            key=self.DIAG_DR_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DR Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-right Y offset."
+            ),
+            visible=False,
+        )
+        diag_dl_dx_config = create_text_config(
+            key=self.DIAG_DL_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DL X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-left X offset."
+            ),
+            visible=False,
+        )
+        diag_dl_dy_config = create_text_config(
+            key=self.DIAG_DL_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DL Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-left Y offset."
+            ),
+            visible=False,
+        )
+        diag_ul_dx_config = create_text_config(
+            key=self.DIAG_UL_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UL X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-left X offset."
+            ),
+            visible=False,
+        )
+        diag_ul_dy_config = create_text_config(
+            key=self.DIAG_UL_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UL Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-left Y offset."
+            ),
+            visible=False,
+        )
+        diag_ur_dx_input_config = create_text_config(
+            key=self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UR dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-right diagonal X offset from center."
+            ),
+        )
+        diag_ur_dy_input_config = create_text_config(
+            key=self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UR dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-right diagonal Y offset from center."
+            ),
+        )
+        diag_dr_dx_input_config = create_text_config(
+            key=self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DR dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-right diagonal X offset from center."
+            ),
+        )
+        diag_dr_dy_input_config = create_text_config(
+            key=self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DR dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-right diagonal Y offset from center."
+            ),
+        )
+        diag_dl_dx_input_config = create_text_config(
+            key=self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DL dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-left diagonal X offset from center."
+            ),
+        )
+        diag_dl_dy_input_config = create_text_config(
+            key=self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DL dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-left diagonal Y offset from center."
+            ),
+        )
+        diag_ul_dx_input_config = create_text_config(
+            key=self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UL dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-left diagonal X offset from center."
+            ),
+        )
+        diag_ul_dy_input_config = create_text_config(
+            key=self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UL dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-left diagonal Y offset from center."
+            ),
+        )
+        apply_diagonals_config = create_action_config(
+            key=self.APPLY_DIAGONALS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Diagonals"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets",
+                "Validate and apply diagonal offsets for the boundary.",
+            ),
+        )
+        reset_diagonals_config = create_action_config(
+            key=self.RESET_DIAGONALS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Diagonals"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear diagonal offsets and regenerate defaults.",
+            ),
+        )
+        show_debug_boundary_config = create_switch_config(
+            key=self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Show Debug Boundary (Edit Mode)"),
+            value=True,
+            description=pgettext(
+                "Controller Widgets",
+                "Show the boundary/center debug overlay while editing this widget.",
+            ),
+        )
 
         self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
         self.add_config_item(self.cancel_button_config)
+        self.add_config_item(calibrate_center_config)
+        self.add_config_item(reset_center_config)
+        self.add_config_item(center_x_config)
+        self.add_config_item(center_y_config)
+        self.add_config_item(center_x_input_config)
+        self.add_config_item(center_y_input_config)
+        self.add_config_item(apply_center_config)
+        self.add_config_item(gain_enabled_config)
+        self.add_config_item(x_gain_config)
+        self.add_config_item(y_gain_config)
+        self.add_config_item(x_gain_input_config)
+        self.add_config_item(y_gain_input_config)
+        self.add_config_item(apply_gain_config)
+        self.add_config_item(tune_angle_config)
+        self.add_config_item(anchor_up_config)
+        self.add_config_item(anchor_down_config)
+        self.add_config_item(anchor_left_config)
+        self.add_config_item(anchor_right_config)
+        self.add_config_item(anchor_up_input_config)
+        self.add_config_item(anchor_down_input_config)
+        self.add_config_item(anchor_left_input_config)
+        self.add_config_item(anchor_right_input_config)
+        self.add_config_item(apply_anchors_config)
+        self.add_config_item(reset_anchors_config)
+        self.add_config_item(set_anchor_up_config)
+        self.add_config_item(set_anchor_down_config)
+        self.add_config_item(set_anchor_left_config)
+        self.add_config_item(set_anchor_right_config)
+        self.add_config_item(cancel_anchor_set_config)
+        self.add_config_item(anchor_deadzone_config)
+        self.add_config_item(diag_ur_dx_config)
+        self.add_config_item(diag_ur_dy_config)
+        self.add_config_item(diag_dr_dx_config)
+        self.add_config_item(diag_dr_dy_config)
+        self.add_config_item(diag_dl_dx_config)
+        self.add_config_item(diag_dl_dy_config)
+        self.add_config_item(diag_ul_dx_config)
+        self.add_config_item(diag_ul_dy_config)
+        self.add_config_item(diag_ur_dx_input_config)
+        self.add_config_item(diag_ur_dy_input_config)
+        self.add_config_item(diag_dr_dx_input_config)
+        self.add_config_item(diag_dr_dy_input_config)
+        self.add_config_item(diag_dl_dx_input_config)
+        self.add_config_item(diag_dl_dy_input_config)
+        self.add_config_item(diag_ul_dx_input_config)
+        self.add_config_item(diag_ul_dy_input_config)
+        self.add_config_item(apply_diagonals_config)
+        self.add_config_item(reset_diagonals_config)
+        self.add_config_item(show_debug_boundary_config)
 
-        # 添加配置变更回调
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
         self.add_config_change_callback(
             "enable_cancel_button", self._on_cancel_button_config_changed
+        )
+        self.add_config_change_callback(
+            self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_CENTER_CONFIG_KEY, self._on_reset_center_clicked
+        )
+        self.add_config_change_callback(
+            self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
+        )
+        self.add_config_change_callback(
+            self.GAIN_ENABLED_CONFIG_KEY, self._on_gain_enabled_changed
+        )
+        self.add_config_change_callback(
+            self.APPLY_GAIN_CONFIG_KEY, self._on_apply_gain_clicked
+        )
+        self.add_config_change_callback(
+            self.TUNE_ANGLE_CONFIG_KEY, self._on_tune_angle_clicked
+        )
+        self.add_config_change_callback(
+            self.APPLY_ANCHORS_CONFIG_KEY, self._on_apply_anchors_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_ANCHORS_CONFIG_KEY, self._on_reset_anchors_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_ANCHOR_UP_CONFIG_KEY, self._on_set_anchor_up_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_ANCHOR_DOWN_CONFIG_KEY, self._on_set_anchor_down_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_ANCHOR_LEFT_CONFIG_KEY, self._on_set_anchor_left_clicked
+        )
+        self.add_config_change_callback(
+            self.SET_ANCHOR_RIGHT_CONFIG_KEY, self._on_set_anchor_right_clicked
+        )
+        self.add_config_change_callback(
+            self.CANCEL_ANCHOR_SET_CONFIG_KEY, self._on_cancel_anchor_set_clicked
+        )
+        self.add_config_change_callback(
+            self.APPLY_DIAGONALS_CONFIG_KEY, self._on_apply_diagonals_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_DIAGONALS_CONFIG_KEY, self._on_reset_diagonals_clicked
+        )
+        self.add_config_change_callback(
+            self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
+        )
+
+        self._sync_center_inputs()
+        self._sync_gain_inputs()
+        self._sync_anchor_inputs()
+        self._ensure_diagonal_defaults()
+        self._sync_diagonal_inputs()
+        self._set_gain_controls_visible(self._is_gain_enabled())
+        self._set_anchor_controls_visible(not self.mapping_mode)
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not self.mapping_mode
+        )
+        self.get_config_manager().connect(
+            "confirmed",
+            lambda *_args: (
+                self._sync_center_inputs(),
+                self._sync_gain_inputs(),
+                self._sync_anchor_inputs(),
+                self._sync_diagonal_inputs(),
+                self._update_circle_if_selected(),
+                self._emit_overlay_event("refresh"),
+            ),
         )
 
     def _on_circle_radius_changed(self, key: str, value: int, restoring:bool) -> None:
@@ -560,6 +1171,1245 @@ class SkillCasting(BaseWidget):
                 self._disable_cancel_button()
         except (ValueError, TypeError) as e:
             logger.error(f"SkillCasting {id(self)} _on_cancel_button_config_changed error: {e}")
+
+    def create_settings_panel(self) -> Gtk.Widget:
+        config_manager = self.get_config_manager()
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        panel.set_margin_top(6)
+        panel.set_margin_bottom(6)
+        panel.set_margin_start(6)
+        panel.set_margin_end(6)
+
+        intro = Gtk.Label(
+            label=pgettext(
+                "Controller Widgets",
+                "Configure casting behavior, calibration, and boundary mapping.",
+            ),
+            xalign=0,
+        )
+        intro.set_wrap(True)
+        panel.append(intro)
+
+        def add_missing_label(section: Gtk.Box, key: str) -> None:
+            label = Gtk.Label(
+                label=pgettext(
+                    "Controller Widgets", "Unable to load setting: {key}"
+                ).format(key=key),
+                xalign=0,
+            )
+            label.set_wrap(True)
+            section.append(label)
+
+        def build_section(
+            title: str,
+            keys: list[str],
+            description: str | None = None,
+            expanded: bool = True,
+            extra_widgets: list[Gtk.Widget] | None = None,
+        ) -> Gtk.Expander:
+            expander = Gtk.Expander(label=title)
+            expander.set_expanded(expanded)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            if description:
+                desc_label = Gtk.Label(label=description, xalign=0)
+                desc_label.set_wrap(True)
+                box.append(desc_label)
+            for key in keys:
+                widget = config_manager.create_ui_widget_for_key(key)
+                if widget is None:
+                    add_missing_label(box, key)
+                else:
+                    box.append(widget)
+            if extra_widgets:
+                for widget in extra_widgets:
+                    box.append(widget)
+            expander.set_child(box)
+            return expander
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Casting Behavior"),
+                ["circle_radius", "cast_timing", "enable_cancel_button"],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Adjust how the skill is cast and whether a cancel button is shown.",
+                ),
+                expanded=True,
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Center Calibration"),
+                [
+                    self.CALIBRATE_CENTER_CONFIG_KEY,
+                    self.RESET_CENTER_CONFIG_KEY,
+                    self.CENTER_X_INPUT_CONFIG_KEY,
+                    self.CENTER_Y_INPUT_CONFIG_KEY,
+                    self.APPLY_CENTER_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Calibrate by clicking the character position on screen, or enter pixel coordinates manually.",
+                ),
+                expanded=True,
+            )
+        )
+
+        tune_hint = Gtk.Label(
+            label=pgettext(
+                "Controller Widgets",
+                "Tuning overlay is available while in Mapping mode.",
+            ),
+            xalign=0,
+        )
+        tune_hint.set_wrap(True)
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Direction Mapping"),
+                [
+                    self.GAIN_ENABLED_CONFIG_KEY,
+                    self.X_GAIN_INPUT_CONFIG_KEY,
+                    self.Y_GAIN_INPUT_CONFIG_KEY,
+                    self.APPLY_GAIN_CONFIG_KEY,
+                    self.TUNE_ANGLE_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Use ellipse correction gains to compensate for uneven movement wheels.",
+                ),
+                expanded=True,
+                extra_widgets=[tune_hint],
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Anchor Calibration"),
+                [
+                    self.ANCHOR_UP_INPUT_CONFIG_KEY,
+                    self.ANCHOR_DOWN_INPUT_CONFIG_KEY,
+                    self.ANCHOR_LEFT_INPUT_CONFIG_KEY,
+                    self.ANCHOR_RIGHT_INPUT_CONFIG_KEY,
+                    self.ANCHOR_DEADZONE_CONFIG_KEY,
+                    self.APPLY_ANCHORS_CONFIG_KEY,
+                    self.RESET_ANCHORS_CONFIG_KEY,
+                    self.SET_ANCHOR_UP_CONFIG_KEY,
+                    self.SET_ANCHOR_DOWN_CONFIG_KEY,
+                    self.SET_ANCHOR_LEFT_CONFIG_KEY,
+                    self.SET_ANCHOR_RIGHT_CONFIG_KEY,
+                    self.CANCEL_ANCHOR_SET_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Define four anchor distances from the calibrated center (in pixels).",
+                ),
+                expanded=False,
+            )
+        )
+
+        self._diag_warning_label = Gtk.Label(xalign=0)
+        self._diag_warning_label.set_wrap(True)
+        self._diag_warning_label.add_css_class("warning")
+        self._diag_warning_label.set_visible(False)
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Diagonal Boundary"),
+                [
+                    self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+                    self.APPLY_DIAGONALS_CONFIG_KEY,
+                    self.RESET_DIAGONALS_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Fine-tune the diagonal boundary points after the axis anchors are set.",
+                ),
+                expanded=False,
+                extra_widgets=[self._diag_warning_label],
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Debug Overlay"),
+                [self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Toggle the edit-mode boundary and center markers for this widget.",
+                ),
+                expanded=False,
+            )
+        )
+
+        tune_widget = config_manager.ui_widgets.get(self.TUNE_ANGLE_CONFIG_KEY)
+        if tune_widget is not None:
+            tune_widget.set_sensitive(self.mapping_mode)
+
+        return panel
+
+    def _on_calibrate_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._set_calibration_mode(True)
+
+    def _on_reset_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._set_calibration_mode(False)
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, self.GAIN_DEFAULT)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, self.GAIN_DEFAULT)
+        self._sync_center_inputs()
+        self._sync_gain_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_apply_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_x = self.get_config_value(self.CENTER_X_INPUT_CONFIG_KEY)
+        raw_y = self.get_config_value(self.CENTER_Y_INPUT_CONFIG_KEY)
+        try:
+            x = float(raw_x)
+            y = float(raw_y)
+        except (TypeError, ValueError):
+            return
+        w, h = self._get_window_size()
+        if not (0 <= x < w and 0 <= y < h):
+            return
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_gain_enabled_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        enabled = self._is_gain_enabled()
+        self._set_gain_controls_visible(enabled)
+        if not enabled:
+            self.cancel_tuning()
+        self._emit_overlay_event("refresh")
+
+    def _on_apply_gain_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        if not self._is_gain_enabled():
+            return
+        raw_x_gain = self.get_config_value(self.X_GAIN_INPUT_CONFIG_KEY)
+        raw_y_gain = self.get_config_value(self.Y_GAIN_INPUT_CONFIG_KEY)
+        x_gain = self._sanitize_gain_value(raw_x_gain)
+        y_gain = self._sanitize_gain_value(raw_y_gain)
+        if x_gain is None or y_gain is None:
+            return
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, x_gain)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, y_gain)
+        self._sync_gain_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_tune_angle_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not self.mapping_mode or not self._is_gain_enabled():
+            return
+        if self._tuning_mode:
+            return
+        self._start_tuning()
+
+    def _on_apply_anchors_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_up = self.get_config_value(self.ANCHOR_UP_INPUT_CONFIG_KEY)
+        raw_down = self.get_config_value(self.ANCHOR_DOWN_INPUT_CONFIG_KEY)
+        raw_left = self.get_config_value(self.ANCHOR_LEFT_INPUT_CONFIG_KEY)
+        raw_right = self.get_config_value(self.ANCHOR_RIGHT_INPUT_CONFIG_KEY)
+        up = self._sanitize_anchor_distance(raw_up)
+        down = self._sanitize_anchor_distance(raw_down)
+        left = self._sanitize_anchor_distance(raw_left)
+        right = self._sanitize_anchor_distance(raw_right)
+        if None in (up, down, left, right):
+            return
+        self._store_anchor_distances(up, down, left, right)
+        self._sync_anchor_inputs()
+        self._ensure_diagonal_defaults()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_controls_visible(True)
+        self._emit_overlay_event("refresh")
+
+    def _on_reset_anchors_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._reset_anchor_distances()
+        self._sync_anchor_inputs()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_controls_visible(False)
+        self.cancel_anchor_set()
+        self._emit_overlay_event("refresh")
+
+    def _on_set_anchor_up_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._start_anchor_set_mode("up")
+
+    def _on_set_anchor_down_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._start_anchor_set_mode("down")
+
+    def _on_set_anchor_left_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._start_anchor_set_mode("left")
+
+    def _on_set_anchor_right_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._start_anchor_set_mode("right")
+
+    def _on_cancel_anchor_set_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self.cancel_anchor_set()
+
+    def _on_apply_diagonals_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not self._are_anchor_distances_valid():
+            return
+        raw_values = {
+            "ur": (
+                self.get_config_value(self.DIAG_UR_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UR_DY_INPUT_CONFIG_KEY),
+            ),
+            "dr": (
+                self.get_config_value(self.DIAG_DR_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DR_DY_INPUT_CONFIG_KEY),
+            ),
+            "dl": (
+                self.get_config_value(self.DIAG_DL_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DL_DY_INPUT_CONFIG_KEY),
+            ),
+            "ul": (
+                self.get_config_value(self.DIAG_UL_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UL_DY_INPUT_CONFIG_KEY),
+            ),
+        }
+        sanitized: dict[str, tuple[int, int]] = {}
+        for key_name, (raw_dx, raw_dy) in raw_values.items():
+            result = self._sanitize_diagonal_pair(key_name, raw_dx, raw_dy)
+            if result is None:
+                self._set_diagonal_warning(
+                    pgettext(
+                        "Controller Widgets",
+                        "Diagonal values must be integers in the expected quadrant.",
+                    )
+                )
+                return
+            sanitized[key_name] = result
+        self._store_diagonal_offsets(sanitized)
+        self._sync_diagonal_inputs()
+        self._set_diagonal_warning("")
+        self._emit_overlay_event("refresh")
+
+    def _on_reset_diagonals_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._reset_diagonal_offsets()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_warning("")
+        self._emit_overlay_event("refresh")
+
+    def _on_debug_boundary_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._update_circle_if_selected()
+        self._emit_overlay_event("refresh")
+
+    def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
+        data = event.data or {}
+        x = data.get("x")
+        y = data.get("y")
+        if x is None or y is None:
+            return
+        w, h = self._get_window_size()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            return
+        if self._anchor_set_mode is not None:
+            self._handle_anchor_click(x, y)
+            return
+        if not self._calibration_mode:
+            return
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._set_calibration_mode(False)
+        self._emit_overlay_event("refresh")
+
+    def _get_calibrated_center(self) -> tuple[float, float] | None:
+        raw_x = self.get_config_value(self.CENTER_X_CONFIG_KEY)
+        raw_y = self.get_config_value(self.CENTER_Y_CONFIG_KEY)
+        if raw_x in (None, "") or raw_y in (None, ""):
+            return None
+        try:
+            x = float(raw_x)
+            y = float(raw_y)
+        except (TypeError, ValueError):
+            return None
+        w, h = self._get_window_size()
+        if not (0 <= x < w and 0 <= y < h):
+            return None
+        return (x, y)
+
+    def _sync_center_inputs(self) -> None:
+        calibrated = self._get_calibrated_center()
+        if calibrated is None:
+            self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, "")
+            self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, "")
+            return
+        self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(int(calibrated[0])))
+        self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
+
+    def _sync_gain_inputs(self) -> None:
+        x_gain, y_gain = self._get_saved_gains()
+        self.set_config_value(self.X_GAIN_INPUT_CONFIG_KEY, f"{x_gain:.2f}")
+        self.set_config_value(self.Y_GAIN_INPUT_CONFIG_KEY, f"{y_gain:.2f}")
+
+    def _sync_anchor_inputs(self) -> None:
+        up = self._sanitize_anchor_distance(
+            self.get_config_value(self.ANCHOR_UP_CONFIG_KEY)
+        )
+        down = self._sanitize_anchor_distance(
+            self.get_config_value(self.ANCHOR_DOWN_CONFIG_KEY)
+        )
+        left = self._sanitize_anchor_distance(
+            self.get_config_value(self.ANCHOR_LEFT_CONFIG_KEY)
+        )
+        right = self._sanitize_anchor_distance(
+            self.get_config_value(self.ANCHOR_RIGHT_CONFIG_KEY)
+        )
+        self.set_config_value(self.ANCHOR_UP_INPUT_CONFIG_KEY, str(up) if up else "")
+        self.set_config_value(self.ANCHOR_DOWN_INPUT_CONFIG_KEY, str(down) if down else "")
+        self.set_config_value(self.ANCHOR_LEFT_INPUT_CONFIG_KEY, str(left) if left else "")
+        self.set_config_value(self.ANCHOR_RIGHT_INPUT_CONFIG_KEY, str(right) if right else "")
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not self.mapping_mode
+        )
+
+    def _sync_diagonal_inputs(self) -> None:
+        diagonals = self._get_diagonal_offsets(allow_default_init=False)
+        values = diagonals or {}
+        self.set_config_value(
+            self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            str(values.get("ur", ("", ""))[0]) if "ur" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            str(values.get("ur", ("", ""))[1]) if "ur" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            str(values.get("dr", ("", ""))[0]) if "dr" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            str(values.get("dr", ("", ""))[1]) if "dr" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            str(values.get("dl", ("", ""))[0]) if "dl" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            str(values.get("dl", ("", ""))[1]) if "dl" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            str(values.get("ul", ("", ""))[0]) if "ul" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            str(values.get("ul", ("", ""))[1]) if "ul" in values else "",
+        )
+
+    def _are_anchor_distances_valid(self) -> bool:
+        return self._get_anchor_distances() is not None
+
+    def _set_gain_controls_visible(self, enabled: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.X_GAIN_INPUT_CONFIG_KEY,
+            self.Y_GAIN_INPUT_CONFIG_KEY,
+            self.APPLY_GAIN_CONFIG_KEY,
+            self.TUNE_ANGLE_CONFIG_KEY,
+        ):
+            manager.set_visible(key, enabled)
+
+    def _set_anchor_controls_visible(self, visible: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.ANCHOR_UP_INPUT_CONFIG_KEY,
+            self.ANCHOR_DOWN_INPUT_CONFIG_KEY,
+            self.ANCHOR_LEFT_INPUT_CONFIG_KEY,
+            self.ANCHOR_RIGHT_INPUT_CONFIG_KEY,
+            self.ANCHOR_DEADZONE_CONFIG_KEY,
+            self.APPLY_ANCHORS_CONFIG_KEY,
+            self.RESET_ANCHORS_CONFIG_KEY,
+            self.SET_ANCHOR_UP_CONFIG_KEY,
+            self.SET_ANCHOR_DOWN_CONFIG_KEY,
+            self.SET_ANCHOR_LEFT_CONFIG_KEY,
+            self.SET_ANCHOR_RIGHT_CONFIG_KEY,
+            self.CANCEL_ANCHOR_SET_CONFIG_KEY,
+        ):
+            manager.set_visible(key, visible)
+
+    def _set_diagonal_controls_visible(self, visible: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            self.APPLY_DIAGONALS_CONFIG_KEY,
+            self.RESET_DIAGONALS_CONFIG_KEY,
+        ):
+            manager.set_visible(key, visible)
+        if self._diag_warning_label is not None:
+            self._diag_warning_label.set_visible(visible and bool(self._diag_warning_label.get_label()))
+
+    def _set_calibration_mode(self, active: bool) -> None:
+        if active:
+            self.cancel_anchor_set()
+        self._calibration_mode = active
+        self._emit_overlay_event("start" if active else "stop")
+
+    def _set_diagonal_warning(self, message: str) -> None:
+        if self._diag_warning_label is None:
+            return
+        self._diag_warning_label.set_label(message)
+        self._diag_warning_label.set_visible(bool(message))
+
+    def _emit_overlay_event(self, action: str) -> None:
+        self.event_bus.emit(
+            Event(
+                EventType.RIGHT_CLICK_TO_WALK_OVERLAY,
+                self,
+                {"action": action, "widget": self},
+            )
+        )
+
+    def get_effective_center(self) -> tuple[float, float]:
+        return self._get_window_center()
+
+    def get_calibrated_center(self) -> tuple[float, float] | None:
+        return self._get_calibrated_center()
+
+    @property
+    def is_calibrating(self) -> bool:
+        return self._calibration_mode
+
+    def cancel_calibration(self) -> None:
+        if not self._calibration_mode:
+            return
+        self._set_calibration_mode(False)
+        self.cancel_anchor_set()
+
+    def cancel_anchor_set(self) -> None:
+        if self._anchor_set_mode is None:
+            return
+        self._anchor_set_mode = None
+        self._emit_overlay_event("stop")
+
+    def is_debug_boundary_enabled(self) -> bool:
+        raw = self.get_config_value(self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return True
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+
+    def _sanitize_gain_value(self, raw_value: object) -> float | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return min(max(value, self.GAIN_MIN), self.GAIN_MAX)
+
+    def _sanitize_anchor_distance(self, raw_value: object) -> int | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        value_int = int(value)
+        if value_int <= 0:
+            return None
+        limit = self._get_anchor_distance_limit()
+        if value_int > limit:
+            return None
+        return value_int
+
+    def _sanitize_diagonal_value(self, raw_value: object) -> int | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        value_int = int(value)
+        if value_int == 0:
+            return None
+        limit = self._get_anchor_distance_limit()
+        if abs(value_int) > limit:
+            return None
+        return value_int
+
+    def _sanitize_diagonal_pair(
+        self, key: str, raw_dx: object, raw_dy: object
+    ) -> tuple[int, int] | None:
+        dx = self._sanitize_diagonal_value(raw_dx)
+        dy = self._sanitize_diagonal_value(raw_dy)
+        if dx is None or dy is None:
+            return None
+        if not self._validate_diagonal_quadrant(key, dx, dy):
+            return None
+        return (dx, dy)
+
+    def _validate_diagonal_quadrant(self, key: str, dx: int, dy: int) -> bool:
+        signs = self.DIAGONAL_QUADRANTS.get(key)
+        if signs is None:
+            return False
+        sign_x, sign_y = signs
+        return (dx * sign_x) > 0 and (dy * sign_y) > 0
+
+    def _get_anchor_distance_limit(self) -> int:
+        w, h = self._get_window_size()
+        return self.ANCHOR_MAX_MULTIPLIER * max(w, h)
+
+    def _get_anchor_distances(self) -> tuple[int, int, int, int] | None:
+        raw_up = self.get_config_value(self.ANCHOR_UP_CONFIG_KEY)
+        raw_down = self.get_config_value(self.ANCHOR_DOWN_CONFIG_KEY)
+        raw_left = self.get_config_value(self.ANCHOR_LEFT_CONFIG_KEY)
+        raw_right = self.get_config_value(self.ANCHOR_RIGHT_CONFIG_KEY)
+        up = self._sanitize_anchor_distance(raw_up)
+        down = self._sanitize_anchor_distance(raw_down)
+        left = self._sanitize_anchor_distance(raw_left)
+        right = self._sanitize_anchor_distance(raw_right)
+        if None in (up, down, left, right):
+            return None
+        return (up, down, left, right)
+
+    def _store_anchor_distances(
+        self, up: int, down: int, left: int, right: int
+    ) -> None:
+        self.set_config_value(self.ANCHOR_UP_CONFIG_KEY, up)
+        self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, down)
+        self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, left)
+        self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, right)
+        self._ensure_diagonal_defaults()
+
+    def _reset_anchor_distances(self) -> None:
+        self.set_config_value(self.ANCHOR_UP_CONFIG_KEY, "")
+        self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, "")
+        self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, "")
+        self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, "")
+
+    def _get_diagonal_offsets(
+        self, allow_default_init: bool = True
+    ) -> dict[str, tuple[int, int]] | None:
+        if not self._are_anchor_distances_valid():
+            return None
+        values = {
+            "ur": (
+                self.get_config_value(self.DIAG_UR_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UR_DY_CONFIG_KEY),
+            ),
+            "dr": (
+                self.get_config_value(self.DIAG_DR_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DR_DY_CONFIG_KEY),
+            ),
+            "dl": (
+                self.get_config_value(self.DIAG_DL_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DL_DY_CONFIG_KEY),
+            ),
+            "ul": (
+                self.get_config_value(self.DIAG_UL_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UL_DY_CONFIG_KEY),
+            ),
+        }
+        results: dict[str, tuple[int, int]] = {}
+        missing_keys: list[str] = []
+        for key_name, (raw_dx, raw_dy) in values.items():
+            if raw_dx in (None, "") or raw_dy in (None, ""):
+                missing_keys.append(key_name)
+                continue
+            sanitized = self._sanitize_diagonal_pair(key_name, raw_dx, raw_dy)
+            if sanitized is None:
+                return None
+            results[key_name] = sanitized
+        if missing_keys and allow_default_init:
+            defaults = self._default_diagonal_offsets()
+            for key_name in missing_keys:
+                if key_name in defaults:
+                    results[key_name] = defaults[key_name]
+            self._store_diagonal_offsets(results)
+        if len(results) != 4:
+            return None
+        return results
+
+    def _default_diagonal_offsets(self) -> dict[str, tuple[int, int]]:
+        distances = self._get_anchor_distances()
+        if distances is None:
+            return {}
+        up, down, left, right = distances
+        scale = self.DIAGONAL_DEFAULT_SCALE
+        return {
+            "ur": (max(1, int(round(right * scale))), -max(1, int(round(up * scale)))),
+            "dr": (max(1, int(round(right * scale))), max(1, int(round(down * scale)))),
+            "dl": (-max(1, int(round(left * scale))), max(1, int(round(down * scale)))),
+            "ul": (-max(1, int(round(left * scale))), -max(1, int(round(up * scale)))),
+        }
+
+    def _ensure_diagonal_defaults(self) -> None:
+        if not self._are_anchor_distances_valid():
+            return
+        current = self._get_diagonal_offsets(allow_default_init=False)
+        if current is not None:
+            return
+        defaults = self._default_diagonal_offsets()
+        if defaults:
+            self._store_diagonal_offsets(defaults)
+
+    def _store_diagonal_offsets(self, offsets: dict[str, tuple[int, int]]) -> None:
+        mapping = {
+            "ur": (self.DIAG_UR_DX_CONFIG_KEY, self.DIAG_UR_DY_CONFIG_KEY),
+            "dr": (self.DIAG_DR_DX_CONFIG_KEY, self.DIAG_DR_DY_CONFIG_KEY),
+            "dl": (self.DIAG_DL_DX_CONFIG_KEY, self.DIAG_DL_DY_CONFIG_KEY),
+            "ul": (self.DIAG_UL_DX_CONFIG_KEY, self.DIAG_UL_DY_CONFIG_KEY),
+        }
+        for key_name, (dx, dy) in offsets.items():
+            keys = mapping.get(key_name)
+            if keys is None:
+                continue
+            self.set_config_value(keys[0], int(dx))
+            self.set_config_value(keys[1], int(dy))
+
+    def _reset_diagonal_offsets(self) -> None:
+        self.set_config_value(self.DIAG_UR_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UR_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DR_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DR_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DL_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DL_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UL_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UL_DY_CONFIG_KEY, "")
+
+    def _clamp_diagonal_offset(
+        self, key: str, dx: float, dy: float
+    ) -> tuple[int, int] | None:
+        signs = self.DIAGONAL_QUADRANTS.get(key)
+        if signs is None:
+            return None
+        sign_x, sign_y = signs
+        limit = self._get_anchor_distance_limit()
+        dx_value = int(round(dx))
+        dy_value = int(round(dy))
+        dx_value = max(-limit, min(limit, dx_value))
+        dy_value = max(-limit, min(limit, dy_value))
+        if sign_x > 0:
+            dx_value = max(dx_value, 1)
+        else:
+            dx_value = min(dx_value, -1)
+        if sign_y > 0:
+            dy_value = max(dy_value, 1)
+        else:
+            dy_value = min(dy_value, -1)
+        return (dx_value, dy_value)
+
+    def get_diagonal_handle_positions(self) -> dict[str, tuple[float, float]] | None:
+        offsets = self._get_diagonal_offsets(allow_default_init=True)
+        if offsets is None:
+            return None
+        center_x, center_y = self._get_window_center()
+        return {
+            key: (center_x + dx, center_y + dy)
+            for key, (dx, dy) in offsets.items()
+        }
+
+    def get_diagonal_handle_radius(self) -> int:
+        return self.DIAGONAL_HANDLE_RADIUS
+
+    def get_diagonal_offset(self, key: str) -> tuple[int, int] | None:
+        offsets = self._get_diagonal_offsets(allow_default_init=True)
+        if offsets is None:
+            return None
+        return offsets.get(key)
+
+    def update_diagonal_offset(self, key: str, dx: float, dy: float) -> bool:
+        clamped = self._clamp_diagonal_offset(key, dx, dy)
+        if clamped is None:
+            return False
+        self._store_diagonal_offsets({key: clamped})
+        self._sync_diagonal_inputs()
+        return True
+
+    def _get_deadzone(self) -> float:
+        raw_deadzone = self.get_config_value(self.ANCHOR_DEADZONE_CONFIG_KEY)
+        try:
+            value = float(raw_deadzone)
+        except (TypeError, ValueError):
+            return self.DEADZONE_DEFAULT
+        if not math.isfinite(value):
+            return self.DEADZONE_DEFAULT
+        return min(max(value, 0.0), self.DEADZONE_MAX)
+
+    def _apply_deadzone(self, length: float) -> float:
+        deadzone = self._get_deadzone()
+        if length < deadzone:
+            return 0.0
+        if deadzone > 0:
+            scaled_length = (length - deadzone) / (1.0 - deadzone)
+            return max(0.0, min(scaled_length, 1.0))
+        return min(max(length, 0.0), 1.0)
+
+    def _is_gain_enabled(self) -> bool:
+        raw = self.get_config_value(self.GAIN_ENABLED_CONFIG_KEY)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return True
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+
+    def _get_saved_gains(self) -> tuple[float, float]:
+        raw_x = self.get_config_value(self.X_GAIN_CONFIG_KEY)
+        raw_y = self.get_config_value(self.Y_GAIN_CONFIG_KEY)
+        x_gain = self._sanitize_gain_value(raw_x)
+        y_gain = self._sanitize_gain_value(raw_y)
+        return (
+            x_gain if x_gain is not None else self.GAIN_DEFAULT,
+            y_gain if y_gain is not None else self.GAIN_DEFAULT,
+        )
+
+    def _get_gains(self) -> tuple[float, float]:
+        x_gain, y_gain = self._get_saved_gains()
+        if not self._is_gain_enabled():
+            return (self.GAIN_DEFAULT, self.GAIN_DEFAULT)
+        return (x_gain, y_gain)
+
+    def _get_tuning_gains(self) -> tuple[float, float]:
+        if self._tuning_mode and self._tuning_x_gain is not None and self._tuning_y_gain is not None:
+            return self._tuning_x_gain, self._tuning_y_gain
+        return self._get_gains()
+
+    def _start_tuning(self) -> None:
+        self._tuning_mode = True
+        x_gain, y_gain = self._get_gains()
+        self._tuning_x_gain = x_gain
+        self._tuning_y_gain = y_gain
+        self._emit_overlay_event("tune_start")
+
+    def _stop_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        self._tuning_mode = False
+        self._tuning_x_gain = None
+        self._tuning_y_gain = None
+        self._emit_overlay_event("tune_stop")
+
+    def cancel_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        self._sync_gain_inputs()
+        self._stop_tuning()
+
+    def _apply_tuning(self) -> None:
+        if not self._tuning_mode:
+            return
+        x_gain = self._sanitize_gain_value(self._tuning_x_gain)
+        y_gain = self._sanitize_gain_value(self._tuning_y_gain)
+        if x_gain is None or y_gain is None:
+            self.cancel_tuning()
+            return
+        self.set_config_value(self.X_GAIN_CONFIG_KEY, x_gain)
+        self.set_config_value(self.Y_GAIN_CONFIG_KEY, y_gain)
+        self._sync_gain_inputs()
+        self._stop_tuning()
+
+    def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
+        if not self._tuning_mode:
+            return False
+        if keyval in (Gdk.KEY_Escape,):
+            self.cancel_tuning()
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self._apply_tuning()
+            return True
+        step = 0.05 if state & Gdk.ModifierType.SHIFT_MASK else 0.01
+        if keyval in (Gdk.KEY_q, Gdk.KEY_Q):
+            self._adjust_tuning_gain("x", -step)
+            return True
+        if keyval in (Gdk.KEY_a, Gdk.KEY_A):
+            self._adjust_tuning_gain("x", step)
+            return True
+        if keyval in (Gdk.KEY_w, Gdk.KEY_W):
+            self._adjust_tuning_gain("y", -step)
+            return True
+        if keyval in (Gdk.KEY_s, Gdk.KEY_S):
+            self._adjust_tuning_gain("y", step)
+            return True
+        return False
+
+    def _adjust_tuning_gain(self, axis: str, delta: float) -> None:
+        if axis == "x":
+            current = self._tuning_x_gain if self._tuning_x_gain is not None else self.GAIN_DEFAULT
+            self._tuning_x_gain = min(max(current + delta, self.GAIN_MIN), self.GAIN_MAX)
+        else:
+            current = self._tuning_y_gain if self._tuning_y_gain is not None else self.GAIN_DEFAULT
+            self._tuning_y_gain = min(max(current + delta, self.GAIN_MIN), self.GAIN_MAX)
+        self._emit_overlay_event("refresh")
+
+    def _start_anchor_set_mode(self, axis: str) -> None:
+        if axis not in ("up", "down", "left", "right"):
+            return
+        self._set_calibration_mode(False)
+        self._anchor_set_mode = axis
+        self._emit_overlay_event("start")
+
+    def _handle_anchor_click(self, x: int, y: int) -> None:
+        if self._anchor_set_mode is None:
+            return
+        center_x, center_y = self._get_window_center()
+        distance = None
+        if self._anchor_set_mode == "up":
+            distance = center_y - y
+        elif self._anchor_set_mode == "down":
+            distance = y - center_y
+        elif self._anchor_set_mode == "left":
+            distance = center_x - x
+        elif self._anchor_set_mode == "right":
+            distance = x - center_x
+        if distance is None:
+            return
+        distance_value = self._sanitize_anchor_distance(int(round(distance)))
+        if distance_value is None:
+            return
+        stored = self._get_anchor_distances()
+        if stored is None:
+            up = self._sanitize_anchor_distance(
+                self.get_config_value(self.ANCHOR_UP_INPUT_CONFIG_KEY)
+            )
+            down = self._sanitize_anchor_distance(
+                self.get_config_value(self.ANCHOR_DOWN_INPUT_CONFIG_KEY)
+            )
+            left = self._sanitize_anchor_distance(
+                self.get_config_value(self.ANCHOR_LEFT_INPUT_CONFIG_KEY)
+            )
+            right = self._sanitize_anchor_distance(
+                self.get_config_value(self.ANCHOR_RIGHT_INPUT_CONFIG_KEY)
+            )
+        else:
+            up, down, left, right = stored
+        if self._anchor_set_mode == "up":
+            up = distance_value
+        elif self._anchor_set_mode == "down":
+            down = distance_value
+        elif self._anchor_set_mode == "left":
+            left = distance_value
+        elif self._anchor_set_mode == "right":
+            right = distance_value
+        if None not in (up, down, left, right):
+            self._store_anchor_distances(up, down, left, right)
+        else:
+            if up is not None:
+                self.set_config_value(self.ANCHOR_UP_CONFIG_KEY, up)
+            if down is not None:
+                self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, down)
+            if left is not None:
+                self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, left)
+            if right is not None:
+                self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, right)
+        self._sync_anchor_inputs()
+        if self._are_anchor_distances_valid():
+            self._ensure_diagonal_defaults()
+            self._sync_diagonal_inputs()
+            self._set_diagonal_controls_visible(True)
+        self._anchor_set_mode = None
+        self._emit_overlay_event("stop")
+        self._emit_overlay_event("refresh")
+
+    def _get_anchor_normalized_vector(
+        self, center_x: float, center_y: float, cursor_x: float, cursor_y: float
+    ) -> tuple[float, float] | None:
+        distances = self._get_anchor_distances()
+        if distances is None:
+            return None
+        dx = cursor_x - center_x
+        dy = cursor_y - center_y
+        length = math.hypot(dx, dy)
+        if length == 0:
+            return (0.0, 0.0)
+        unit_x = dx / length
+        unit_y = dy / length
+
+        diagonal_offsets = self._get_diagonal_offsets(allow_default_init=True)
+        contour = None
+        if diagonal_offsets is not None:
+            contour = self._build_diagonal_contour(center_x, center_y, distances, diagonal_offsets)
+        if contour:
+            boundary = self._ray_intersection_distance(
+                (center_x, center_y), (unit_x, unit_y), contour
+            )
+            if boundary is not None and boundary > 0:
+                normalized = min(length / boundary, 1.0)
+                normalized = self._apply_deadzone(normalized)
+                return (unit_x * normalized, unit_y * normalized)
+
+        up, down, left, right = distances
+        rx = right if dx >= 0 else left
+        ry = down if dy >= 0 else up
+        if rx <= 0 or ry <= 0:
+            return None
+        nx = dx / rx
+        ny = dy / ry
+        length = math.hypot(nx, ny)
+        if length == 0:
+            return (0.0, 0.0)
+        if length > 1.0:
+            nx /= length
+            ny /= length
+            length = 1.0
+        scaled_length = self._apply_deadzone(length)
+        if scaled_length == 0:
+            return (0.0, 0.0)
+        nx = (nx / length) * scaled_length
+        ny = (ny / length) * scaled_length
+        return (nx, ny)
+
+    def _build_diagonal_contour(
+        self,
+        center_x: float,
+        center_y: float,
+        distances: tuple[int, int, int, int],
+        diagonals: dict[str, tuple[int, int]],
+        samples: int = 256,
+    ) -> list[tuple[float, float]]:
+        up, down, left, right = distances
+        points = [
+            (center_x, center_y - up),
+            (center_x + diagonals["ur"][0], center_y + diagonals["ur"][1]),
+            (center_x + right, center_y),
+            (center_x + diagonals["dr"][0], center_y + diagonals["dr"][1]),
+            (center_x, center_y + down),
+            (center_x + diagonals["dl"][0], center_y + diagonals["dl"][1]),
+            (center_x - left, center_y),
+            (center_x + diagonals["ul"][0], center_y + diagonals["ul"][1]),
+        ]
+        return self._catmull_rom_closed(points, samples)
+
+    @staticmethod
+    def _catmull_rom_closed(
+        points: list[tuple[float, float]], samples: int
+    ) -> list[tuple[float, float]]:
+        if len(points) < 4:
+            return points
+        total_samples = max(samples, len(points) * 4)
+        per_segment = max(1, total_samples // len(points))
+        spline: list[tuple[float, float]] = []
+        count = len(points)
+        for i in range(count):
+            p0 = points[(i - 1) % count]
+            p1 = points[i]
+            p2 = points[(i + 1) % count]
+            p3 = points[(i + 2) % count]
+            for step in range(per_segment):
+                t = step / per_segment
+                t2 = t * t
+                t3 = t2 * t
+                x = 0.5 * (
+                    2 * p1[0]
+                    + (-p0[0] + p2[0]) * t
+                    + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+                    + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+                )
+                y = 0.5 * (
+                    2 * p1[1]
+                    + (-p0[1] + p2[1]) * t
+                    + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+                    + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+                )
+                spline.append((x, y))
+        if spline and spline[0] != spline[-1]:
+            spline.append(spline[0])
+        return spline
+
+    @staticmethod
+    def _ray_intersection_distance(
+        origin: tuple[float, float],
+        direction: tuple[float, float],
+        contour: list[tuple[float, float]],
+    ) -> float | None:
+        if not contour or len(contour) < 2:
+            return None
+        ox, oy = origin
+        dx, dy = direction
+        min_t: float | None = None
+
+        def cross(ax: float, ay: float, bx: float, by: float) -> float:
+            return ax * by - ay * bx
+
+        for i in range(len(contour) - 1):
+            ax, ay = contour[i]
+            bx, by = contour[i + 1]
+            sx = bx - ax
+            sy = by - ay
+            rxs = cross(dx, dy, sx, sy)
+            if abs(rxs) < 1e-6:
+                continue
+            qpx = ax - ox
+            qpy = ay - oy
+            t = cross(qpx, qpy, sx, sy) / rxs
+            u = cross(qpx, qpy, dx, dy) / rxs
+            if t >= 0 and 0 <= u <= 1:
+                if min_t is None or t < min_t:
+                    min_t = t
+        return min_t
+
+    def get_anchor_overlay_data(self) -> dict[str, object] | None:
+        distances = self._get_anchor_distances()
+        if distances is None:
+            return None
+        center = self._get_window_center()
+        up, down, left, right = distances
+        center_x, center_y = center
+        anchors = {
+            "up": (center_x, center_y - up),
+            "down": (center_x, center_y + down),
+            "left": (center_x - left, center_y),
+            "right": (center_x + right, center_y),
+        }
+        diagonals = self._get_diagonal_offsets(allow_default_init=True)
+        points: list[tuple[float, float]] = []
+        if diagonals is not None:
+            points = self._build_diagonal_contour(center_x, center_y, distances, diagonals)
+        if not points:
+            segments = 256
+            p = min(4.0, max(2.0, 2.2))
+            k = min(10.0, max(1.0, 4.0))
+
+            def lerp(a: float, b: float, t: float) -> float:
+                return a + (b - a) * t
+
+            for i in range(segments + 1):
+                rad = 2 * math.pi * i / segments
+                dx = math.cos(rad)
+                dy = math.sin(rad)
+                sx = 0.5 * (1.0 + math.tanh(k * dx))
+                sy = 0.5 * (1.0 + math.tanh(k * dy))
+                rx = lerp(left, right, sx)
+                ry = lerp(up, down, sy)
+                denom = (abs(dx) / rx) ** p + (abs(dy) / ry) ** p
+                r = 1.0 / (denom ** (1.0 / p))
+                x = center_x + r * dx
+                y = center_y + r * dy
+                points.append((x, y))
+        diagonal_points = None
+        if diagonals is not None:
+            diagonal_points = {
+                key: (center_x + dx, center_y + dy)
+                for key, (dx, dy) in diagonals.items()
+            }
+        return {
+            "center": center,
+            "anchors": anchors,
+            "contour": points,
+            "diagonals": diagonal_points,
+        }
+
+    @staticmethod
+    def _vector_to_angle(dx: float, dy: float) -> float:
+        angle = math.degrees(math.atan2(dy, dx))
+        if angle < 0:
+            angle += 360
+        return angle
+
+    def get_tuning_overlay_data(
+        self, cursor_position: tuple[int, int] | None
+    ) -> dict[str, object]:
+        x_gain, y_gain = self._get_tuning_gains()
+        data: dict[str, object] = {
+            "x_gain": x_gain,
+            "y_gain": y_gain,
+            "raw_angle": None,
+            "corrected_angle": None,
+            "raw_vector": None,
+            "corrected_vector": None,
+            "center": self._get_window_center(),
+        }
+        if cursor_position is None:
+            return data
+        center_x, center_y = data["center"]
+        dx = cursor_position[0] - center_x
+        dy = cursor_position[1] - center_y
+        raw_angle = self._vector_to_angle(dx, dy)
+        dx2 = dx * x_gain
+        dy2 = dy * y_gain
+        corrected_angle = self._vector_to_angle(dx2, dy2)
+        data.update(
+            {
+                "raw_angle": raw_angle,
+                "corrected_angle": corrected_angle,
+                "raw_vector": (dx, dy),
+                "corrected_vector": (dx2, dy2),
+            }
+        )
+        return data
 
     # def _on_custom_event(self, event):
     #     """处理自定义事件"""
@@ -611,36 +2461,30 @@ class SkillCasting(BaseWidget):
         if self._event_processor_task and not self._event_processor_task.done():
             self._event_processor_task.cancel()
 
+    def on_delete(self):
+        self._emit_overlay_event("unregister")
+        super().on_delete()
+
     def _update_circle_if_selected(self):
         """如果当前组件被选中，更新圆形绘制"""
-        if self.is_selected:
+        if self.is_selected and not self.mapping_mode and self.is_debug_boundary_enabled():
             circle_data = {
                 "widget_id": id(self),
                 "widget_type": "skill_casting",
                 "circle_radius": self.get_config_value("circle_radius"),
                 "action": "show",
             }
-            self.event_bus.emit(Event(EventType.WIDGET_SELECTION_OVERLAY, self, circle_data))
-
-    def _on_selection_changed(self, widget, pspec):
-        """当选中状态变化时的回调"""
-        if self.is_selected:
-            # 发送显示圆形的事件
-            circle_data = {
-                "widget_id": id(self),
-                "widget_type": "skill_casting",
-                "circle_radius": self.get_config_value("circle_radius"),
-                "action": "show",
-            }
-            self.event_bus.emit(Event(EventType.WIDGET_SELECTION_OVERLAY, self, circle_data))
         else:
-            # 发送隐藏圆形的事件
             circle_data = {
                 "widget_id": id(self),
                 "widget_type": "skill_casting",
                 "action": "hide",
             }
-            self.event_bus.emit(Event(EventType.WIDGET_SELECTION_OVERLAY, self, circle_data))
+        self.event_bus.emit(Event(EventType.WIDGET_SELECTION_OVERLAY, self, circle_data))
+
+    def _on_selection_changed(self, widget, pspec):
+        """当选中状态变化时的回调"""
+        self._update_circle_if_selected()
 
     def draw_widget_content(self, cr: "Context[Surface]", width: int, height: int):
         """绘制圆形按钮的具体内容"""
@@ -874,6 +2718,9 @@ class SkillCasting(BaseWidget):
 
     def _get_window_center(self) -> tuple[float, float]:
         """获取窗口中心坐标"""
+        calibrated = self._get_calibrated_center()
+        if calibrated is not None:
+            return calibrated
         w, h = self.screen_info.get_host_resolution()
         return (w / 2, h / 2)
 
@@ -891,45 +2738,41 @@ class SkillCasting(BaseWidget):
         外圆：窗口中心为圆心，半径按百分比缩放
         内圆：widget中心为圆心，宽度/2为半径
         """
-        # 获取窗口信息
         window_center_x, window_center_y = self._get_window_center()
-        window_width, window_height = self._get_window_size()
 
-        # 外圆参数（使用像素值）
-        outer_radius = self.get_config_value("circle_radius")
-
-        # 虚拟摇杆圆形参数
         widget_center_x = self.center_x
         widget_center_y = self.center_y
         widget_radius = self.width / 2
 
-        # 计算鼠标相对于外圆中心的位置
+        anchor_vector = self._get_anchor_normalized_vector(
+            window_center_x, window_center_y, mouse_x, mouse_y
+        )
+        if anchor_vector is not None:
+            nx, ny = anchor_vector
+            return (
+                widget_center_x + nx * widget_radius,
+                widget_center_y + ny * widget_radius,
+            )
+
+        outer_radius = self.get_config_value("circle_radius")
+        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
+            outer_radius = 200
+
         rel_x = mouse_x - window_center_x
         rel_y = mouse_y - window_center_y
 
-        # 计算距离
+        x_gain, y_gain = self._get_gains()
+        rel_x *= x_gain
+        rel_y *= y_gain
+
         distance = math.sqrt(rel_x * rel_x + rel_y * rel_y)
 
-        if distance <= outer_radius:
-            # 鼠标在外圆内，直接按比例映射
-            if distance == 0:
-                # 避免除零，直接返回widget中心
-                target_x = widget_center_x
-                target_y = widget_center_y
-            else:
-                # 按距离比例映射
-                ratio = distance / outer_radius
-                target_x = widget_center_x + (rel_x / distance) * ratio * widget_radius
-                target_y = widget_center_y + (rel_y / distance) * ratio * widget_radius
-        else:
-            # 鼠标在外圆外，投影到圆形边界，再映射到widget圆形边界
-            if distance == 0:
-                target_x = widget_center_x
-                target_y = widget_center_y
-            else:
-                # 投影到外圆边界，然后映射到widget圆形边界
-                target_x = widget_center_x + (rel_x / distance) * widget_radius
-                target_y = widget_center_y + (rel_y / distance) * widget_radius
+        if distance == 0:
+            return (widget_center_x, widget_center_y)
+
+        ratio = min(distance / outer_radius, 1.0)
+        target_x = widget_center_x + (rel_x / distance) * ratio * widget_radius
+        target_y = widget_center_y + (rel_y / distance) * ratio * widget_radius
 
         return (target_x, target_y)
 
@@ -1046,3 +2889,18 @@ class SkillCasting(BaseWidget):
     @property
     def center_y(self):
         return self.y + self.height / 2
+
+    @property
+    def is_tuning(self) -> bool:
+        return self._tuning_mode
+
+    def set_mapping_mode(self, mapping_mode: bool) -> None:
+        super().set_mapping_mode(mapping_mode)
+        self._set_anchor_controls_visible(not mapping_mode)
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not mapping_mode
+        )
+        if mapping_mode:
+            self.cancel_anchor_set()
+            self.cancel_tuning()
+        self._update_circle_if_selected()
