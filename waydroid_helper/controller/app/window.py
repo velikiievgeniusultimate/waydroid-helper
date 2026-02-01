@@ -7,7 +7,7 @@ Provides implementation and window management for transparent windows
 
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 from functools import partial
 
 import gi, signal
@@ -52,37 +52,41 @@ MAX_RETRY_ATTEMPTS = 5
 RETRY_DELAY_SECONDS = 3
 
 
-class FloatingSettingsWindow(Adw.Window):
-    """Floating, resizable settings window for widgets."""
+class CircleOverlay(Gtk.DrawingArea):
+    """Circular overlay for drawing skill release range indicators"""
 
-    def __init__(
-        self,
-        parent: Gtk.Window,
-        widget: object,
-        content: Gtk.Widget,
-        on_close: Callable[[], None],
-        min_width: int,
-        min_height: int,
-    ) -> None:
-        super().__init__(transient_for=parent, modal=False)
-        self.set_title(f"{getattr(widget, 'WIDGET_NAME', _('Settings'))} {_('Settings')}")
-        self.set_resizable(True)
-        self.set_decorated(True)
-        self.set_default_size(min_width, min_height)
+    def __init__(self):
+        super().__init__()
+        self.circle_data = None
+        self.set_draw_func(self._draw_circle, None)
 
-        header = Adw.HeaderBar()
-        header.set_title_widget(Gtk.Label(label=self.get_title()))
-        self.set_titlebar(header)
+    def set_circle_data(self, data):
+        """Sets circular data and triggers redraw"""
+        self.circle_data = data
+        self.queue_draw()
 
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        container.set_margin_top(10)
-        container.set_margin_bottom(10)
-        container.set_margin_start(10)
-        container.set_margin_end(10)
-        container.append(content)
-        self.set_content(container)
+    def _draw_circle(self, widget, cr, width, height, user_data):
+        """Draws a circle"""
+        if not self.circle_data:
+            return
 
-        self.connect("close-request", lambda _w: on_close() or False)
+        # Get circle parameters
+        circle_radius = self.circle_data.get("circle_radius", 200)
+
+        # Calculate circle parameters
+        window_center_x = width / 2
+        window_center_y = height / 2
+
+        # Draw circle boundary
+        cr.set_source_rgba(0.6, 0.6, 0.6, 0.8)  # Semi-transparent gray
+        cr.set_line_width(3)
+        cr.arc(window_center_x, window_center_y, circle_radius, 0, 2 * math.pi)
+        cr.stroke()
+
+        # Draw circle center point
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.9)
+        cr.arc(window_center_x, window_center_y, 4, 0, 2 * math.pi)
+        cr.fill()
 
 
 class RightClickToWalkOverlay(Gtk.DrawingArea):
@@ -314,56 +318,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                 cr.arc(point[0], point[1], radius, 0, 2 * math.pi)
                 cr.fill()
 
-    def _get_ideal_calibration_overlay(self) -> tuple[object, dict[str, object]] | None:
-        for widget in self.widgets:
-            getter = getattr(widget, "get_ideal_calibration_overlay_data", None)
-            if callable(getter):
-                data = getter()
-                if isinstance(data, dict) and data.get("active"):
-                    return widget, data
-        return None
-
-    def _draw_ideal_calibration_overlay(self, cr, data: dict[str, object], width: int, height: int) -> None:
-        cr.set_source_rgba(0, 0, 0, 0.45)
-        cr.rectangle(0, 0, width, height)
-        cr.fill()
-
-        target = data.get("target")
-        center = data.get("center")
-        if target and center:
-            tx, ty = target
-            cr.set_source_rgba(1.0, 0.6, 0.2, 0.9)
-            cr.set_line_width(2.0)
-            cr.arc(tx, ty, 8, 0, 2 * math.pi)
-            cr.stroke()
-            cr.set_source_rgba(1.0, 0.8, 0.3, 0.4)
-            cr.arc(tx, ty, 14, 0, 2 * math.pi)
-            cr.stroke()
-
-        cr.set_source_rgba(1, 1, 1, 0.95)
-        cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
-        cr.set_font_size(14)
-        margin = 16
-        line_height = 18
-        lines = [
-            data.get("title", ""),
-            data.get("progress", ""),
-            data.get("instruction", ""),
-        ]
-        if data.get("awaiting_confirmation"):
-            lines.append(data.get("confirmation", ""))
-        for index, text in enumerate(line for line in lines if line):
-            cr.move_to(margin, margin + line_height * (index + 1))
-            cr.show_text(text)
-
     def _draw_overlay(self, widget, cr, width, height, user_data):
         if not self.widgets:
-            return
-
-        calibration = self._get_ideal_calibration_overlay()
-        if calibration is not None:
-            _, data = calibration
-            self._draw_ideal_calibration_overlay(cr, data, width, height)
             return
 
         if not self.mapping_mode:
@@ -565,6 +521,11 @@ class TransparentWindow(Adw.Window):
             subscriber=self,
         )
         self.event_bus.subscribe(
+            EventType.WIDGET_SELECTION_OVERLAY,
+            self._on_widget_selection_overlay,
+            subscriber=self,
+        )
+        self.event_bus.subscribe(
             EventType.RIGHT_CLICK_TO_WALK_OVERLAY,
             self._on_right_click_to_walk_overlay,
             subscriber=self,
@@ -575,14 +536,18 @@ class TransparentWindow(Adw.Window):
             subscriber=self,
         )
 
+        # Create circular drawing overlay
+        self.circle_overlay = CircleOverlay()
+        self.circle_overlay.set_can_target(False)  # Ignore mouse events
+        overlay.add_overlay(self.circle_overlay)
+
         self.right_click_overlay = RightClickToWalkOverlay()
         overlay.add_overlay(self.right_click_overlay)
 
-        self.active_settings_window: FloatingSettingsWindow | None = None
+        self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
         self.active_settings_widget: object | None = None
         self.active_mask_layer: Gtk.Widget | None = None
-        self._mask_disabled_controllers: list[tuple[Gtk.EventController, Gtk.PropagationPhase]] | None = None
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -617,25 +582,209 @@ class TransparentWindow(Adw.Window):
         # Initial hint
         GLib.idle_add(self.show_notification, _("Edit Mode (F1: Switch Mode)"))
 
-    def _on_widget_settings_requested(self, event: "Event[bool]"):
-        """Callback when a widget requests settings, opens a floating window."""
-        widget = event.source
-        self._open_settings_window(widget)
+    def _on_widget_selection_overlay(self, event):
+        """Handles component selection overlay events"""
+        overlay_data = event.data
+        if overlay_data["action"] == "show":
+            self.circle_overlay.set_circle_data(overlay_data)
+        elif overlay_data["action"] == "hide":
+            self.circle_overlay.set_circle_data(None)
 
-    def _open_settings_window(self, widget: object) -> None:
-        if self.active_settings_window is not None:
-            self._close_settings_window()
+    def _on_widget_settings_requested(self, event: "Event[bool]"):
+        """Callback when a widget requests settings, pops up a Popover"""
+        widget = event.source
+
+        popover = Gtk.Popover()
+        popover.set_autohide(event.data)
+
+        if not event.data:
+            # 当 autohide 为 false 时，创建遮罩层
+            overlay = self.get_content()
+            if isinstance(overlay, Gtk.Overlay):
+                # 创建遮罩层
+                mask_layer = Gtk.Box()
+                mask_layer.set_hexpand(True)
+                mask_layer.set_vexpand(True)
+                mask_layer.set_name("mask-layer")
+                mask_layer.set_visible(False)
+                mask_layer.set_cursor_from_name("default")
+                mask_layer.add_css_class("calibration-mask")
+                mask_layer.set_opacity(0.0)
+
+                # 设置遮罩层样式，确保它覆盖整个窗口并阻止事件
+                # mask_layer.set_css_classes(["modal-mask"])
+                # mask_layer.set_opacity(0.01)  # 几乎透明但可见，确保能接收事件
+
+                # Allow the mask to be activated only during calibration.
+                mask_layer.set_can_target(False)
+                mask_layer.set_focusable(False)
+
+                # 添加事件控制器，确保消费所有事件
+                controllers = []
+
+                # 鼠标点击控制器
+                click_controller = Gtk.GestureClick()
+                click_controller.set_button(0)
+
+                def on_mask_clicked(controller, n_press, x, y):
+                    """遮罩层点击事件处理"""
+                    self.event_bus.emit(
+                        Event(EventType.MASK_CLICKED, self, {"x": int(x), "y": int(y)})
+                    )
+
+                    # 关键：停止事件传播
+                    controller.set_state(Gtk.EventSequenceState.CLAIMED)
+                    return True
+
+                click_controller.connect("pressed", on_mask_clicked)
+                click_controller.connect("released", lambda c, n, x, y: True)
+                mask_layer.add_controller(click_controller)
+                controllers.append(click_controller)
+
+                motion_controller = Gtk.EventControllerMotion.new()
+
+                def on_mask_motion(_controller, x, y):
+                    if (
+                        self.right_click_overlay.active_widget is not None
+                        and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                    ):
+                        self.right_click_overlay.update_cursor((int(x), int(y)))
+
+                motion_controller.connect("motion", on_mask_motion)
+                mask_layer.add_controller(motion_controller)
+                controllers.append(motion_controller)
+
+                key_controller = Gtk.EventControllerKey.new()
+
+                def on_mask_key_press(_controller, keyval, keycode, state):
+                    if keyval == Gdk.KEY_Escape:
+                        widget_to_cancel = self.active_settings_widget
+                        if (
+                            self.right_click_overlay.active_widget is not None
+                            and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                        ):
+                            widget_to_cancel = self.right_click_overlay.active_widget
+                        if widget_to_cancel is None:
+                            return False
+                        cancel = getattr(widget_to_cancel, "cancel_calibration", None)
+                        if callable(cancel) and getattr(widget_to_cancel, "is_calibrating", False):
+                            cancel()
+                            return True
+                        cancel_anchor_set = getattr(widget_to_cancel, "cancel_anchor_set", None)
+                        if callable(cancel_anchor_set):
+                            cancel_anchor_set()
+                            return True
+                    return False
+
+                key_controller.connect("key-pressed", on_mask_key_press)
+                mask_layer.add_controller(key_controller)
+                controllers.append(key_controller)
+
+                def disable_window_controllers():
+                    """临时禁用窗口级别的控制器"""
+                    # 获取窗口的所有控制器
+                    window_controllers = []
+                    for controller in self.observe_controllers():
+                        if isinstance(
+                            controller,
+                            (
+                                Gtk.EventControllerKey,
+                                Gtk.GestureClick,
+                                Gtk.EventControllerMotion,
+                                Gtk.EventControllerScroll,
+                            ),
+                        ):
+                            original_state = controller.get_propagation_phase()
+                            controller.set_propagation_phase(Gtk.PropagationPhase.NONE)
+                            window_controllers.append((controller, original_state))
+                    return window_controllers
+
+                def restore_window_controllers(window_controllers):
+                    """恢复窗口级别的控制器"""
+                    for controller, original_state in window_controllers:
+                        controller.set_propagation_phase(original_state)
+
+                # 禁用窗口控制器
+                disabled_controllers = disable_window_controllers()
+
+                overlay.add_overlay(mask_layer)
+                mask_layer.set_visible(True)
+                self.active_mask_layer = mask_layer
+
+                # 设置弹出窗口关闭时的清理逻辑
+                async def on_popover_closed_with_mask(p):
+                    """弹出窗口关闭时的清理"""
+                    # 恢复窗口控制器
+                    restore_window_controllers(disabled_controllers)
+
+                    if mask_layer.get_parent():
+                        overlay.remove_overlay(mask_layer)
+                    if self.active_mask_layer is mask_layer:
+                        self.active_mask_layer = None
+                    if self.active_settings_popover is p:
+                        self.active_settings_popover = None
+                        self.active_settings_panel = None
+                        self.active_settings_widget = None
+
+                    # 清理UI引用
+                    config_manager = widget.get_config_manager()
+                    config_manager.clear_ui_references()
+                    p.unparent()
+
+                popover.connect(
+                    "closed",
+                    lambda w: asyncio.create_task(on_popover_closed_with_mask(w)),
+                )
+        else:
+            # 原有的 autohide 为 true 的逻辑
+            def workaround_popover_auto_hide(controller, n_press, x, y):
+                if popover.get_visible() and popover.get_autohide():
+                    if (
+                        x < 0
+                        or y < 0
+                        or x > popover.get_width()
+                        or y > popover.get_height()
+                    ):
+                        popover.popdown()
+
+            click_controller = Gtk.GestureClick()
+            click_controller.connect("pressed", workaround_popover_auto_hide)
+            popover.add_controller(click_controller)
+
+            def on_popover_closed(p):
+                config_manager = widget.get_config_manager()
+                config_manager.clear_ui_references()
+                p.unparent()
+                self.queue_draw()
+                if self.active_settings_popover is p:
+                    self.active_settings_popover = None
+                    self.active_settings_panel = None
+                    self.active_settings_widget = None
+
+            popover.connect("closed", on_popover_closed)
+
+        popover.set_parent(self)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        min_width = getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250)
+        min_height = getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
+        max_height = getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
+        main_box.set_size_request(min_width, -1)
+        popover.set_child(main_box)
+        self.active_settings_popover = popover
+        self.active_settings_panel = main_box
+        self.active_settings_widget = widget
+
+        title_label = Gtk.Label()
+        title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
+        title_label.set_halign(Gtk.Align.CENTER)
+        main_box.append(title_label)
 
         config_manager = widget.get_config_manager()
-        min_width = getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 320)
-        min_height = getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 360)
-        max_height = getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 800)
-
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
 
         if not config_manager.configs:
             label = Gtk.Label(label=_("This widget has no settings."))
-            content.append(label)
+            main_box.append(label)
         else:
             try:
                 config_panel = widget.create_settings_panel()
@@ -649,153 +798,29 @@ class TransparentWindow(Adw.Window):
             scroller.set_min_content_height(min_height)
             scroller.set_max_content_height(max_height)
             scroller.set_child(config_panel)
-            content.append(scroller)
+            main_box.append(scroller)
 
-            confirm_button = Gtk.Button(label=_("Close"), halign=Gtk.Align.END)
+            confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
             confirm_button.add_css_class("suggested-action")
 
-            def on_confirm_clicked(_btn):
+            def on_confirm_clicked(btn):
                 config_manager.emit("confirmed")
-                self._close_settings_window()
+                popover.popdown()
 
             confirm_button.connect("clicked", on_confirm_clicked)
-            content.append(confirm_button)
+            main_box.append(confirm_button)
 
-        self.active_settings_panel = content
-        self.active_settings_widget = widget
-        self._ensure_mask_layer()
+        settings_button_rect = Gdk.Rectangle()
+        bounds = widget.get_settings_button_bounds()
+        settings_button_rect.x = bounds[0] + widget.x
+        settings_button_rect.y = bounds[1] + widget.y
+        settings_button_rect.width = bounds[2]
+        settings_button_rect.height = bounds[3]
 
-        def on_close():
-            config_manager.emit("confirmed")
-            self._close_settings_window()
+        popover.set_pointing_to(settings_button_rect)
+        popover.set_position(Gtk.PositionType.BOTTOM)
 
-        self.active_settings_window = FloatingSettingsWindow(
-            self,
-            widget,
-            content,
-            on_close,
-            min_width,
-            min_height,
-        )
-        self.active_settings_window.present()
-
-    def _ensure_mask_layer(self) -> None:
-        if self.active_mask_layer is not None:
-            return
-        overlay = self.get_content()
-        if not isinstance(overlay, Gtk.Overlay):
-            return
-        mask_layer = Gtk.Box()
-        mask_layer.set_hexpand(True)
-        mask_layer.set_vexpand(True)
-        mask_layer.set_name("mask-layer")
-        mask_layer.set_visible(True)
-        mask_layer.set_cursor_from_name("default")
-        mask_layer.add_css_class("calibration-mask")
-        mask_layer.set_opacity(0.0)
-        mask_layer.set_can_target(False)
-        mask_layer.set_focusable(False)
-
-        click_controller = Gtk.GestureClick()
-        click_controller.set_button(0)
-
-        def on_mask_clicked(controller, n_press, x, y):
-            self.event_bus.emit(
-                Event(EventType.MASK_CLICKED, self, {"x": int(x), "y": int(y)})
-            )
-            controller.set_state(Gtk.EventSequenceState.CLAIMED)
-            return True
-
-        click_controller.connect("pressed", on_mask_clicked)
-        click_controller.connect("released", lambda c, n, x, y: True)
-        mask_layer.add_controller(click_controller)
-
-        motion_controller = Gtk.EventControllerMotion.new()
-
-        def on_mask_motion(_controller, x, y):
-            if (
-                self.right_click_overlay.active_widget is not None
-                and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
-            ):
-                self.right_click_overlay.update_cursor((int(x), int(y)))
-
-        motion_controller.connect("motion", on_mask_motion)
-        mask_layer.add_controller(motion_controller)
-
-        key_controller = Gtk.EventControllerKey.new()
-
-        def on_mask_key_press(_controller, keyval, keycode, state):
-            if keyval != Gdk.KEY_Escape:
-                return False
-            widget_to_cancel = self.active_settings_widget
-            if (
-                self.right_click_overlay.active_widget is not None
-                and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
-            ):
-                widget_to_cancel = self.right_click_overlay.active_widget
-            if widget_to_cancel is None:
-                return False
-            cancel = getattr(widget_to_cancel, "cancel_calibration", None)
-            if callable(cancel) and getattr(widget_to_cancel, "is_calibrating", False):
-                cancel()
-                return True
-            cancel_anchor_set = getattr(widget_to_cancel, "cancel_anchor_set", None)
-            if callable(cancel_anchor_set):
-                cancel_anchor_set()
-                return True
-            cancel_wizard = getattr(widget_to_cancel, "cancel_ideal_calibration", None)
-            if callable(cancel_wizard):
-                cancel_wizard()
-                return True
-            return False
-
-        key_controller.connect("key-pressed", on_mask_key_press)
-        mask_layer.add_controller(key_controller)
-
-        overlay.add_overlay(mask_layer)
-        self.active_mask_layer = mask_layer
-
-    def _disable_window_controllers(self) -> list[tuple[Gtk.EventController, Gtk.PropagationPhase]]:
-        window_controllers = []
-        for controller in self.observe_controllers():
-            if isinstance(
-                controller,
-                (
-                    Gtk.EventControllerKey,
-                    Gtk.GestureClick,
-                    Gtk.EventControllerMotion,
-                    Gtk.EventControllerScroll,
-                ),
-            ):
-                original_state = controller.get_propagation_phase()
-                controller.set_propagation_phase(Gtk.PropagationPhase.NONE)
-                window_controllers.append((controller, original_state))
-        return window_controllers
-
-    def _restore_window_controllers(
-        self, window_controllers: list[tuple[Gtk.EventController, Gtk.PropagationPhase]]
-    ) -> None:
-        for controller, original_state in window_controllers:
-            controller.set_propagation_phase(original_state)
-
-    def _close_settings_window(self) -> None:
-        if self.active_settings_window is not None:
-            self.active_settings_window.destroy()
-            self.active_settings_window = None
-        if self.active_settings_panel is not None:
-            self.active_settings_panel = None
-        if self.active_settings_widget is not None:
-            config_manager = self.active_settings_widget.get_config_manager()
-            config_manager.clear_ui_references()
-            self.active_settings_widget = None
-        if self.active_mask_layer is not None:
-            overlay = self.get_content()
-            if isinstance(overlay, Gtk.Overlay) and self.active_mask_layer.get_parent():
-                overlay.remove_overlay(self.active_mask_layer)
-            self.active_mask_layer = None
-        if self._mask_disabled_controllers:
-            self._restore_window_controllers(self._mask_disabled_controllers)
-            self._mask_disabled_controllers = None
+        popover.popup()
 
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
@@ -809,12 +834,14 @@ class TransparentWindow(Adw.Window):
             return
         if action == "start":
             self.right_click_overlay.set_active_widget(widget)
+            self._set_settings_panel_visible(False, widget)
             self._set_mask_interactive(True)
             self._set_mask_dimmed(True)
             return
         if action == "stop":
             if self.right_click_overlay.active_widget is widget:
                 self.right_click_overlay.set_active_widget(None)
+            self._set_settings_panel_visible(True, widget)
             self._set_mask_interactive(False)
             self._set_mask_dimmed(False)
             return
@@ -835,8 +862,11 @@ class TransparentWindow(Adw.Window):
     def _set_settings_panel_visible(self, visible: bool, widget: object | None) -> None:
         if widget is None or self.active_settings_widget is not widget:
             return
-        if self.active_settings_window is not None:
-            self.active_settings_window.set_visible(visible)
+        if self.active_settings_panel is not None:
+            self.active_settings_panel.set_visible(visible)
+        if self.active_settings_popover is not None:
+            self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
+            self.active_settings_popover.set_can_target(visible)
 
     def _set_mask_interactive(self, interactive: bool) -> None:
         if self.active_mask_layer is None:
@@ -845,11 +875,6 @@ class TransparentWindow(Adw.Window):
         self.active_mask_layer.set_focusable(interactive)
         if interactive:
             self.active_mask_layer.grab_focus()
-            if self._mask_disabled_controllers is None:
-                self._mask_disabled_controllers = self._disable_window_controllers()
-        elif self._mask_disabled_controllers:
-            self._restore_window_controllers(self._mask_disabled_controllers)
-            self._mask_disabled_controllers = None
 
     def _set_mask_dimmed(self, dimmed: bool) -> None:
         if self.active_mask_layer is None:
@@ -1500,11 +1525,6 @@ class TransparentWindow(Adw.Window):
             cancel = getattr(self.right_click_overlay.active_widget, "cancel_calibration", None)
             if callable(cancel):
                 cancel()
-                return True
-        if keyval == Gdk.KEY_Escape and self.active_settings_widget is not None:
-            cancel_wizard = getattr(self.active_settings_widget, "cancel_ideal_calibration", None)
-            if callable(cancel_wizard):
-                cancel_wizard()
                 return True
         if keyval == Gdk.KEY_Escape and self.active_settings_widget is not None:
             cancel_anchor_set = getattr(self.active_settings_widget, "cancel_anchor_set", None)
