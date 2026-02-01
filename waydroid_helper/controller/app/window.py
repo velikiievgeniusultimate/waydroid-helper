@@ -99,6 +99,9 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.tuning_widget: object | None = None
         self.cursor_position: tuple[int, int] | None = None
         self.mapping_mode: bool = False
+        self.drag_widget: object | None = None
+        self.drag_point: str | None = None
+        self.drag_start_offset: tuple[int, int] | None = None
         self.set_draw_func(self._draw_overlay, None)
         self.set_can_target(False)
         self.set_visible(False)
@@ -115,6 +118,10 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.active_widget = None
         if self.tuning_widget is widget:
             self.tuning_widget = None
+        if self.drag_widget is widget:
+            self.drag_widget = None
+            self.drag_point = None
+            self.drag_start_offset = None
         if not self.widgets:
             self.set_visible(False)
         self.queue_draw()
@@ -154,6 +161,9 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.active_widget = None
             self.tuning_widget = None
             self.cursor_position = None
+            self.drag_widget = None
+            self.drag_point = None
+            self.drag_start_offset = None
             self.set_visible(bool(self.widgets))
         else:
             self.set_visible(bool(self.widgets))
@@ -163,6 +173,90 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.cursor_position = position
         if self.get_visible():
             self.queue_draw()
+
+    def handle_edit_mouse_pressed(self, x: float, y: float, button: int) -> bool:
+        if self.mapping_mode or button != Gdk.BUTTON_PRIMARY:
+            return False
+        if self.drag_widget is not None:
+            return True
+        target = self._find_diagonal_handle(x, y)
+        if target is None:
+            return False
+        widget, key_name = target
+        get_offset = getattr(widget, "get_diagonal_offset", None)
+        offset = get_offset(key_name) if callable(get_offset) else None
+        if offset is None:
+            return False
+        self.drag_widget = widget
+        self.drag_point = key_name
+        self.drag_start_offset = offset
+        self.queue_draw()
+        return True
+
+    def handle_edit_mouse_motion(self, x: float, y: float) -> bool:
+        if self.mapping_mode or self.drag_widget is None or self.drag_point is None:
+            return False
+        get_center = getattr(self.drag_widget, "get_effective_center", None)
+        update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
+        if not callable(get_center) or not callable(update_offset):
+            return False
+        center = get_center()
+        if center is None:
+            return False
+        dx = x - center[0]
+        dy = y - center[1]
+        updated = update_offset(self.drag_point, dx, dy)
+        if updated:
+            self.queue_draw()
+        return updated
+
+    def handle_edit_mouse_released(self, button: int) -> bool:
+        if self.mapping_mode or button != Gdk.BUTTON_PRIMARY:
+            return False
+        if self.drag_widget is None:
+            return False
+        self.drag_widget = None
+        self.drag_point = None
+        self.drag_start_offset = None
+        self.queue_draw()
+        return True
+
+    def handle_edit_key(self, keyval: int) -> bool:
+        if keyval != Gdk.KEY_Escape or self.drag_widget is None:
+            return False
+        if self.drag_widget is not None and self.drag_point is not None and self.drag_start_offset is not None:
+            update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
+            if callable(update_offset):
+                update_offset(self.drag_point, *self.drag_start_offset)
+        self.drag_widget = None
+        self.drag_point = None
+        self.drag_start_offset = None
+        self.queue_draw()
+        return True
+
+    def _find_diagonal_handle(self, x: float, y: float) -> tuple[object, str] | None:
+        closest = None
+        min_distance_sq = None
+        for widget in self.widgets:
+            get_handles = getattr(widget, "get_diagonal_handle_positions", None)
+            get_radius = getattr(widget, "get_diagonal_handle_radius", None)
+            if not callable(get_handles):
+                continue
+            handles = get_handles()
+            if not handles:
+                continue
+            radius = get_radius() if callable(get_radius) else 10
+            radius_sq = radius * radius
+            for key_name, (hx, hy) in handles.items():
+                dx = x - hx
+                dy = y - hy
+                distance_sq = dx * dx + dy * dy
+                if distance_sq <= radius_sq and (
+                    min_distance_sq is None or distance_sq < min_distance_sq
+                ):
+                    min_distance_sq = distance_sq
+                    closest = (widget, key_name)
+        return closest
 
     def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
         if not self.mapping_mode or self.tuning_widget is None:
@@ -194,9 +288,10 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         cr.arc(x, y, 10, 0, 2 * math.pi)
         cr.stroke()
 
-    def _draw_anchor_shape(self, cr, data: dict[str, object]) -> None:
+    def _draw_anchor_shape(self, cr, widget: object, data: dict[str, object]) -> None:
         contour = data.get("contour")
         anchors = data.get("anchors")
+        diagonals = data.get("diagonals")
         if not contour or not anchors:
             return
         points = list(contour)
@@ -213,6 +308,15 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         for anchor in anchors.values():
             cr.arc(anchor[0], anchor[1], 4, 0, 2 * math.pi)
             cr.fill()
+
+        if diagonals:
+            for key_name, point in diagonals.items():
+                radius = 5
+                if self.drag_widget is widget and self.drag_point == key_name:
+                    radius = 7
+                cr.set_source_rgba(0.2, 0.8, 1.0, 0.9)
+                cr.arc(point[0], point[1], radius, 0, 2 * math.pi)
+                cr.fill()
 
     def _draw_overlay(self, widget, cr, width, height, user_data):
         if not self.widgets:
@@ -231,7 +335,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                 if callable(get_anchor_overlay):
                     anchor_data = get_anchor_overlay()
                     if anchor_data is not None:
-                        self._draw_anchor_shape(cr, anchor_data)
+                        self._draw_anchor_shape(cr, center_widget, anchor_data)
             return
 
         is_calibrating = False
@@ -990,6 +1094,8 @@ class TransparentWindow(Adw.Window):
                     widget_at_position.on_widget_right_clicked(local_x, local_y)
 
         elif button == Gdk.BUTTON_PRIMARY:  # Left click
+            if self.right_click_overlay.handle_edit_mouse_pressed(x, y, button):
+                return True
             self.workspace_manager.handle_mouse_press(controller, n_press, x, y)
 
     def on_window_mouse_motion(self, controller, x, y):
@@ -1032,6 +1138,8 @@ class TransparentWindow(Adw.Window):
             return
 
         # In edit mode, delegate to workspace_manager
+        if self.right_click_overlay.handle_edit_mouse_motion(x, y):
+            return
         self.workspace_manager.handle_mouse_motion(controller, x, y)
 
     def on_window_mouse_scroll(
@@ -1182,6 +1290,8 @@ class TransparentWindow(Adw.Window):
             return
 
         # Mouse release handling in edit mode, delegate to workspace_manager
+        if self.right_click_overlay.handle_edit_mouse_released(button):
+            return True
         self.workspace_manager.handle_mouse_release(controller, n_press, x, y)
 
     def start_widget_drag(self, widget, x, y):
@@ -1401,6 +1511,8 @@ class TransparentWindow(Adw.Window):
     def on_global_key_press(self, controller, keyval, keycode, state):
         """Global keyboard event - supports dual mode, uses event handler chain"""
         if self.right_click_overlay.handle_tuning_key(keyval, state):
+            return True
+        if self.right_click_overlay.handle_edit_key(keyval):
             return True
         if (
             keyval == Gdk.KEY_Escape
