@@ -79,12 +79,38 @@ class RightClickToWalk(BaseWidget):
     SET_ANCHOR_RIGHT_CONFIG_KEY = "set_anchor_right"
     CANCEL_ANCHOR_SET_CONFIG_KEY = "cancel_anchor_set"
     ANCHOR_DEADZONE_CONFIG_KEY = "anchor_deadzone"
+    DIAG_UR_DX_CONFIG_KEY = "diag_ur_dx"
+    DIAG_UR_DY_CONFIG_KEY = "diag_ur_dy"
+    DIAG_DR_DX_CONFIG_KEY = "diag_dr_dx"
+    DIAG_DR_DY_CONFIG_KEY = "diag_dr_dy"
+    DIAG_DL_DX_CONFIG_KEY = "diag_dl_dx"
+    DIAG_DL_DY_CONFIG_KEY = "diag_dl_dy"
+    DIAG_UL_DX_CONFIG_KEY = "diag_ul_dx"
+    DIAG_UL_DY_CONFIG_KEY = "diag_ul_dy"
+    DIAG_UR_DX_INPUT_CONFIG_KEY = "diag_ur_dx_input"
+    DIAG_UR_DY_INPUT_CONFIG_KEY = "diag_ur_dy_input"
+    DIAG_DR_DX_INPUT_CONFIG_KEY = "diag_dr_dx_input"
+    DIAG_DR_DY_INPUT_CONFIG_KEY = "diag_dr_dy_input"
+    DIAG_DL_DX_INPUT_CONFIG_KEY = "diag_dl_dx_input"
+    DIAG_DL_DY_INPUT_CONFIG_KEY = "diag_dl_dy_input"
+    DIAG_UL_DX_INPUT_CONFIG_KEY = "diag_ul_dx_input"
+    DIAG_UL_DY_INPUT_CONFIG_KEY = "diag_ul_dy_input"
+    APPLY_DIAGONALS_CONFIG_KEY = "apply_diagonals"
+    RESET_DIAGONALS_CONFIG_KEY = "reset_diagonals"
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
     ANCHOR_MAX_MULTIPLIER = 4
     DEADZONE_DEFAULT = 0.1
     DEADZONE_MAX = 0.95
+    DIAGONAL_DEFAULT_SCALE = 0.7
+    DIAGONAL_HANDLE_RADIUS = 12
+    DIAGONAL_QUADRANTS = {
+        "ur": (1, -1),
+        "dr": (1, 1),
+        "dl": (-1, 1),
+        "ul": (-1, -1),
+    }
 
     def __init__(
         self,
@@ -156,6 +182,7 @@ class RightClickToWalk(BaseWidget):
         self._tuning_y_gain: float | None = None
         self._locked_target_position: tuple[float, float] | None = None
         self._anchor_set_mode: str | None = None
+        self._diag_warning_label: Gtk.Label | None = None
 
         self.setup_config()
         self.event_bus.subscribe(
@@ -1026,6 +1053,160 @@ class RightClickToWalk(BaseWidget):
                 "Normalized deadzone before movement begins (0.0–1.0).",
             ),
         )
+        diag_ur_dx_config = create_text_config(
+            key=self.DIAG_UR_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UR X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-right X offset."
+            ),
+            visible=False,
+        )
+        diag_ur_dy_config = create_text_config(
+            key=self.DIAG_UR_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UR Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-right Y offset."
+            ),
+            visible=False,
+        )
+        diag_dr_dx_config = create_text_config(
+            key=self.DIAG_DR_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DR X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-right X offset."
+            ),
+            visible=False,
+        )
+        diag_dr_dy_config = create_text_config(
+            key=self.DIAG_DR_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DR Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-right Y offset."
+            ),
+            visible=False,
+        )
+        diag_dl_dx_config = create_text_config(
+            key=self.DIAG_DL_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DL X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-left X offset."
+            ),
+            visible=False,
+        )
+        diag_dl_dy_config = create_text_config(
+            key=self.DIAG_DL_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal DL Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal down-left Y offset."
+            ),
+            visible=False,
+        )
+        diag_ul_dx_config = create_text_config(
+            key=self.DIAG_UL_DX_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UL X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-left X offset."
+            ),
+            visible=False,
+        )
+        diag_ul_dy_config = create_text_config(
+            key=self.DIAG_UL_DY_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal UL Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored diagonal up-left Y offset."
+            ),
+            visible=False,
+        )
+        diag_ur_dx_input_config = create_text_config(
+            key=self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UR dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-right diagonal X offset from center."
+            ),
+        )
+        diag_ur_dy_input_config = create_text_config(
+            key=self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UR dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-right diagonal Y offset from center."
+            ),
+        )
+        diag_dr_dx_input_config = create_text_config(
+            key=self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DR dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-right diagonal X offset from center."
+            ),
+        )
+        diag_dr_dy_input_config = create_text_config(
+            key=self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DR dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-right diagonal Y offset from center."
+            ),
+        )
+        diag_dl_dx_input_config = create_text_config(
+            key=self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DL dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-left diagonal X offset from center."
+            ),
+        )
+        diag_dl_dy_input_config = create_text_config(
+            key=self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "DL dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Down-left diagonal Y offset from center."
+            ),
+        )
+        diag_ul_dx_input_config = create_text_config(
+            key=self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UL dx (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-left diagonal X offset from center."
+            ),
+        )
+        diag_ul_dy_input_config = create_text_config(
+            key=self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "UL dy (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Up-left diagonal Y offset from center."
+            ),
+        )
+        apply_diagonals_config = create_action_config(
+            key=self.APPLY_DIAGONALS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Diagonals"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets",
+                "Validate and apply diagonal offsets for the boundary.",
+            ),
+        )
+        reset_diagonals_config = create_action_config(
+            key=self.RESET_DIAGONALS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Diagonals"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear diagonal offsets and regenerate defaults.",
+            ),
+        )
 
         self.add_config_item(calibrate_center_config)
         self.add_config_item(reset_center_config)
@@ -1057,6 +1238,24 @@ class RightClickToWalk(BaseWidget):
         self.add_config_item(set_anchor_right_config)
         self.add_config_item(cancel_anchor_set_config)
         self.add_config_item(anchor_deadzone_config)
+        self.add_config_item(diag_ur_dx_config)
+        self.add_config_item(diag_ur_dy_config)
+        self.add_config_item(diag_dr_dx_config)
+        self.add_config_item(diag_dr_dy_config)
+        self.add_config_item(diag_dl_dx_config)
+        self.add_config_item(diag_dl_dy_config)
+        self.add_config_item(diag_ul_dx_config)
+        self.add_config_item(diag_ul_dy_config)
+        self.add_config_item(diag_ur_dx_input_config)
+        self.add_config_item(diag_ur_dy_input_config)
+        self.add_config_item(diag_dr_dx_input_config)
+        self.add_config_item(diag_dr_dy_input_config)
+        self.add_config_item(diag_dl_dx_input_config)
+        self.add_config_item(diag_dl_dy_input_config)
+        self.add_config_item(diag_ul_dx_input_config)
+        self.add_config_item(diag_ul_dy_input_config)
+        self.add_config_item(apply_diagonals_config)
+        self.add_config_item(reset_diagonals_config)
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
@@ -1097,17 +1296,29 @@ class RightClickToWalk(BaseWidget):
         self.add_config_change_callback(
             self.CANCEL_ANCHOR_SET_CONFIG_KEY, self._on_cancel_anchor_set_clicked
         )
+        self.add_config_change_callback(
+            self.APPLY_DIAGONALS_CONFIG_KEY, self._on_apply_diagonals_clicked
+        )
+        self.add_config_change_callback(
+            self.RESET_DIAGONALS_CONFIG_KEY, self._on_reset_diagonals_clicked
+        )
         self._sync_center_inputs()
         self._sync_gain_inputs()
         self._sync_anchor_inputs()
+        self._ensure_diagonal_defaults()
+        self._sync_diagonal_inputs()
         self._set_gain_controls_visible(self._is_gain_enabled())
         self._set_anchor_controls_visible(not self.mapping_mode)
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not self.mapping_mode
+        )
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
                 self._sync_center_inputs(),
                 self._sync_gain_inputs(),
                 self._sync_anchor_inputs(),
+                self._sync_diagonal_inputs(),
                 self._emit_overlay_event("refresh"),
             ),
         )
@@ -1237,6 +1448,35 @@ class RightClickToWalk(BaseWidget):
             )
         )
 
+        self._diag_warning_label = Gtk.Label(xalign=0)
+        self._diag_warning_label.set_wrap(True)
+        self._diag_warning_label.add_css_class("warning")
+        self._diag_warning_label.set_visible(False)
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Diagonal Boundary"),
+                [
+                    self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+                    self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+                    self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+                    self.APPLY_DIAGONALS_CONFIG_KEY,
+                    self.RESET_DIAGONALS_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Fine-tune the diagonal boundary points after the axis anchors are set.",
+                ),
+                expanded=False,
+                extra_widgets=[self._diag_warning_label],
+            )
+        )
+
         tune_widget = config_manager.ui_widgets.get(self.TUNE_ANGLE_CONFIG_KEY)
         if tune_widget is not None:
             tune_widget.set_sensitive(self.mapping_mode)
@@ -1339,6 +1579,9 @@ class RightClickToWalk(BaseWidget):
             return
         self._store_anchor_distances(up, down, left, right)
         self._sync_anchor_inputs()
+        self._ensure_diagonal_defaults()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_controls_visible(True)
         self._emit_overlay_event("refresh")
 
     def _on_reset_anchors_clicked(
@@ -1348,6 +1591,8 @@ class RightClickToWalk(BaseWidget):
             return
         self._reset_anchor_distances()
         self._sync_anchor_inputs()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_controls_visible(False)
         self.cancel_anchor_set()
         self._emit_overlay_event("refresh")
 
@@ -1385,6 +1630,56 @@ class RightClickToWalk(BaseWidget):
         if restoring:
             return
         self.cancel_anchor_set()
+
+    def _on_apply_diagonals_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not self._are_anchor_distances_valid():
+            return
+        raw_values = {
+            "ur": (
+                self.get_config_value(self.DIAG_UR_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UR_DY_INPUT_CONFIG_KEY),
+            ),
+            "dr": (
+                self.get_config_value(self.DIAG_DR_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DR_DY_INPUT_CONFIG_KEY),
+            ),
+            "dl": (
+                self.get_config_value(self.DIAG_DL_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DL_DY_INPUT_CONFIG_KEY),
+            ),
+            "ul": (
+                self.get_config_value(self.DIAG_UL_DX_INPUT_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UL_DY_INPUT_CONFIG_KEY),
+            ),
+        }
+        sanitized: dict[str, tuple[int, int]] = {}
+        for key_name, (raw_dx, raw_dy) in raw_values.items():
+            result = self._sanitize_diagonal_pair(key_name, raw_dx, raw_dy)
+            if result is None:
+                self._set_diagonal_warning(
+                    pgettext(
+                        "Controller Widgets",
+                        "Diagonal values must be integers in the expected quadrant.",
+                    )
+                )
+                return
+            sanitized[key_name] = result
+        self._store_diagonal_offsets(sanitized)
+        self._sync_diagonal_inputs()
+        self._set_diagonal_warning("")
+        self._emit_overlay_event("refresh")
+
+    def _on_reset_diagonals_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._reset_diagonal_offsets()
+        self._sync_diagonal_inputs()
+        self._set_diagonal_warning("")
+        self._emit_overlay_event("refresh")
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
         data = event.data or {}
@@ -1452,6 +1747,48 @@ class RightClickToWalk(BaseWidget):
         self.set_config_value(self.ANCHOR_DOWN_INPUT_CONFIG_KEY, str(down) if down else "")
         self.set_config_value(self.ANCHOR_LEFT_INPUT_CONFIG_KEY, str(left) if left else "")
         self.set_config_value(self.ANCHOR_RIGHT_INPUT_CONFIG_KEY, str(right) if right else "")
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not self.mapping_mode
+        )
+
+    def _sync_diagonal_inputs(self) -> None:
+        diagonals = self._get_diagonal_offsets(allow_default_init=False)
+        values = diagonals or {}
+        self.set_config_value(
+            self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            str(values.get("ur", ("", ""))[0]) if "ur" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            str(values.get("ur", ("", ""))[1]) if "ur" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            str(values.get("dr", ("", ""))[0]) if "dr" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            str(values.get("dr", ("", ""))[1]) if "dr" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            str(values.get("dl", ("", ""))[0]) if "dl" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            str(values.get("dl", ("", ""))[1]) if "dl" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            str(values.get("ul", ("", ""))[0]) if "ul" in values else "",
+        )
+        self.set_config_value(
+            self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            str(values.get("ul", ("", ""))[1]) if "ul" in values else "",
+        )
+
+    def _are_anchor_distances_valid(self) -> bool:
+        return self._get_anchor_distances() is not None
 
     def _set_gain_controls_visible(self, enabled: bool) -> None:
         manager = self.get_config_manager()
@@ -1481,11 +1818,35 @@ class RightClickToWalk(BaseWidget):
         ):
             manager.set_visible(key, visible)
 
+    def _set_diagonal_controls_visible(self, visible: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.DIAG_UR_DX_INPUT_CONFIG_KEY,
+            self.DIAG_UR_DY_INPUT_CONFIG_KEY,
+            self.DIAG_DR_DX_INPUT_CONFIG_KEY,
+            self.DIAG_DR_DY_INPUT_CONFIG_KEY,
+            self.DIAG_DL_DX_INPUT_CONFIG_KEY,
+            self.DIAG_DL_DY_INPUT_CONFIG_KEY,
+            self.DIAG_UL_DX_INPUT_CONFIG_KEY,
+            self.DIAG_UL_DY_INPUT_CONFIG_KEY,
+            self.APPLY_DIAGONALS_CONFIG_KEY,
+            self.RESET_DIAGONALS_CONFIG_KEY,
+        ):
+            manager.set_visible(key, visible)
+        if self._diag_warning_label is not None:
+            self._diag_warning_label.set_visible(visible and bool(self._diag_warning_label.get_label()))
+
     def _set_calibration_mode(self, active: bool) -> None:
         if active:
             self.cancel_anchor_set()
         self._calibration_mode = active
         self._emit_overlay_event("start" if active else "stop")
+
+    def _set_diagonal_warning(self, message: str) -> None:
+        if self._diag_warning_label is None:
+            return
+        self._diag_warning_label.set_label(message)
+        self._diag_warning_label.set_visible(bool(message))
 
     def _emit_overlay_event(self, action: str) -> None:
         self.event_bus.emit(
@@ -1542,6 +1903,39 @@ class RightClickToWalk(BaseWidget):
             return None
         return value_int
 
+    def _sanitize_diagonal_value(self, raw_value: object) -> int | None:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        value_int = int(value)
+        if value_int == 0:
+            return None
+        limit = self._get_anchor_distance_limit()
+        if abs(value_int) > limit:
+            return None
+        return value_int
+
+    def _sanitize_diagonal_pair(
+        self, key: str, raw_dx: object, raw_dy: object
+    ) -> tuple[int, int] | None:
+        dx = self._sanitize_diagonal_value(raw_dx)
+        dy = self._sanitize_diagonal_value(raw_dy)
+        if dx is None or dy is None:
+            return None
+        if not self._validate_diagonal_quadrant(key, dx, dy):
+            return None
+        return (dx, dy)
+
+    def _validate_diagonal_quadrant(self, key: str, dx: int, dy: int) -> bool:
+        signs = self.DIAGONAL_QUADRANTS.get(key)
+        if signs is None:
+            return False
+        sign_x, sign_y = signs
+        return (dx * sign_x) > 0 and (dy * sign_y) > 0
+
     def _get_anchor_distance_limit(self) -> int:
         w, h = self._get_window_size()
         return self.ANCHOR_MAX_MULTIPLIER * max(w, h)
@@ -1566,12 +1960,152 @@ class RightClickToWalk(BaseWidget):
         self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, down)
         self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, left)
         self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, right)
+        self._ensure_diagonal_defaults()
 
     def _reset_anchor_distances(self) -> None:
         self.set_config_value(self.ANCHOR_UP_CONFIG_KEY, "")
         self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, "")
         self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, "")
         self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, "")
+
+    def _get_diagonal_offsets(
+        self, allow_default_init: bool = True
+    ) -> dict[str, tuple[int, int]] | None:
+        if not self._are_anchor_distances_valid():
+            return None
+        values = {
+            "ur": (
+                self.get_config_value(self.DIAG_UR_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UR_DY_CONFIG_KEY),
+            ),
+            "dr": (
+                self.get_config_value(self.DIAG_DR_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DR_DY_CONFIG_KEY),
+            ),
+            "dl": (
+                self.get_config_value(self.DIAG_DL_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_DL_DY_CONFIG_KEY),
+            ),
+            "ul": (
+                self.get_config_value(self.DIAG_UL_DX_CONFIG_KEY),
+                self.get_config_value(self.DIAG_UL_DY_CONFIG_KEY),
+            ),
+        }
+        results: dict[str, tuple[int, int]] = {}
+        missing_keys: list[str] = []
+        for key_name, (raw_dx, raw_dy) in values.items():
+            if raw_dx in (None, "") or raw_dy in (None, ""):
+                missing_keys.append(key_name)
+                continue
+            sanitized = self._sanitize_diagonal_pair(key_name, raw_dx, raw_dy)
+            if sanitized is None:
+                return None
+            results[key_name] = sanitized
+        if missing_keys and allow_default_init:
+            defaults = self._default_diagonal_offsets()
+            for key_name in missing_keys:
+                if key_name in defaults:
+                    results[key_name] = defaults[key_name]
+            self._store_diagonal_offsets(results)
+        if len(results) != 4:
+            return None
+        return results
+
+    def _default_diagonal_offsets(self) -> dict[str, tuple[int, int]]:
+        distances = self._get_anchor_distances()
+        if distances is None:
+            return {}
+        up, down, left, right = distances
+        scale = self.DIAGONAL_DEFAULT_SCALE
+        return {
+            "ur": (max(1, int(round(right * scale))), -max(1, int(round(up * scale)))),
+            "dr": (max(1, int(round(right * scale))), max(1, int(round(down * scale)))),
+            "dl": (-max(1, int(round(left * scale))), max(1, int(round(down * scale)))),
+            "ul": (-max(1, int(round(left * scale))), -max(1, int(round(up * scale)))),
+        }
+
+    def _ensure_diagonal_defaults(self) -> None:
+        if not self._are_anchor_distances_valid():
+            return
+        current = self._get_diagonal_offsets(allow_default_init=False)
+        if current is not None:
+            return
+        defaults = self._default_diagonal_offsets()
+        if defaults:
+            self._store_diagonal_offsets(defaults)
+
+    def _store_diagonal_offsets(self, offsets: dict[str, tuple[int, int]]) -> None:
+        mapping = {
+            "ur": (self.DIAG_UR_DX_CONFIG_KEY, self.DIAG_UR_DY_CONFIG_KEY),
+            "dr": (self.DIAG_DR_DX_CONFIG_KEY, self.DIAG_DR_DY_CONFIG_KEY),
+            "dl": (self.DIAG_DL_DX_CONFIG_KEY, self.DIAG_DL_DY_CONFIG_KEY),
+            "ul": (self.DIAG_UL_DX_CONFIG_KEY, self.DIAG_UL_DY_CONFIG_KEY),
+        }
+        for key_name, (dx, dy) in offsets.items():
+            keys = mapping.get(key_name)
+            if keys is None:
+                continue
+            self.set_config_value(keys[0], int(dx))
+            self.set_config_value(keys[1], int(dy))
+
+    def _reset_diagonal_offsets(self) -> None:
+        self.set_config_value(self.DIAG_UR_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UR_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DR_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DR_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DL_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_DL_DY_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UL_DX_CONFIG_KEY, "")
+        self.set_config_value(self.DIAG_UL_DY_CONFIG_KEY, "")
+
+    def _clamp_diagonal_offset(
+        self, key: str, dx: float, dy: float
+    ) -> tuple[int, int] | None:
+        signs = self.DIAGONAL_QUADRANTS.get(key)
+        if signs is None:
+            return None
+        sign_x, sign_y = signs
+        limit = self._get_anchor_distance_limit()
+        dx_value = int(round(dx))
+        dy_value = int(round(dy))
+        dx_value = max(-limit, min(limit, dx_value))
+        dy_value = max(-limit, min(limit, dy_value))
+        if sign_x > 0:
+            dx_value = max(dx_value, 1)
+        else:
+            dx_value = min(dx_value, -1)
+        if sign_y > 0:
+            dy_value = max(dy_value, 1)
+        else:
+            dy_value = min(dy_value, -1)
+        return (dx_value, dy_value)
+
+    def get_diagonal_handle_positions(self) -> dict[str, tuple[float, float]] | None:
+        offsets = self._get_diagonal_offsets(allow_default_init=True)
+        if offsets is None:
+            return None
+        center_x, center_y = self._get_window_center()
+        return {
+            key: (center_x + dx, center_y + dy)
+            for key, (dx, dy) in offsets.items()
+        }
+
+    def get_diagonal_handle_radius(self) -> int:
+        return self.DIAGONAL_HANDLE_RADIUS
+
+    def get_diagonal_offset(self, key: str) -> tuple[int, int] | None:
+        offsets = self._get_diagonal_offsets(allow_default_init=True)
+        if offsets is None:
+            return None
+        return offsets.get(key)
+
+    def update_diagonal_offset(self, key: str, dx: float, dy: float) -> bool:
+        clamped = self._clamp_diagonal_offset(key, dx, dy)
+        if clamped is None:
+            return False
+        self._store_diagonal_offsets({key: clamped})
+        self._sync_diagonal_inputs()
+        return True
 
     def _get_deadzone(self) -> float:
         raw_deadzone = self.get_config_value(self.ANCHOR_DEADZONE_CONFIG_KEY)
@@ -1582,6 +2116,15 @@ class RightClickToWalk(BaseWidget):
         if not math.isfinite(value):
             return self.DEADZONE_DEFAULT
         return min(max(value, 0.0), self.DEADZONE_MAX)
+
+    def _apply_deadzone(self, length: float) -> float:
+        deadzone = self._get_deadzone()
+        if length < deadzone:
+            return 0.0
+        if deadzone > 0:
+            scaled_length = (length - deadzone) / (1.0 - deadzone)
+            return max(0.0, min(scaled_length, 1.0))
+        return min(max(length, 0.0), 1.0)
 
     def _is_gain_enabled(self) -> bool:
         raw = self.get_config_value(self.GAIN_ENABLED_CONFIG_KEY)
@@ -1742,6 +2285,10 @@ class RightClickToWalk(BaseWidget):
             if right is not None:
                 self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, right)
         self._sync_anchor_inputs()
+        if self._are_anchor_distances_valid():
+            self._ensure_diagonal_defaults()
+            self._sync_diagonal_inputs()
+            self._set_diagonal_controls_visible(True)
         self._anchor_set_mode = None
         self._emit_overlay_event("stop")
         self._emit_overlay_event("refresh")
@@ -1752,9 +2299,28 @@ class RightClickToWalk(BaseWidget):
         distances = self._get_anchor_distances()
         if distances is None:
             return None
-        up, down, left, right = distances
         dx = cursor_x - center_x
         dy = cursor_y - center_y
+        length = math.hypot(dx, dy)
+        if length == 0:
+            return (0.0, 0.0)
+        unit_x = dx / length
+        unit_y = dy / length
+
+        diagonal_offsets = self._get_diagonal_offsets(allow_default_init=True)
+        contour = None
+        if diagonal_offsets is not None:
+            contour = self._build_diagonal_contour(center_x, center_y, distances, diagonal_offsets)
+        if contour:
+            boundary = self._ray_intersection_distance(
+                (center_x, center_y), (unit_x, unit_y), contour
+            )
+            if boundary is not None and boundary > 0:
+                normalized = min(length / boundary, 1.0)
+                normalized = self._apply_deadzone(normalized)
+                return (unit_x * normalized, unit_y * normalized)
+
+        up, down, left, right = distances
         rx = right if dx >= 0 else left
         ry = down if dy >= 0 else up
         if rx <= 0 or ry <= 0:
@@ -1768,17 +2334,101 @@ class RightClickToWalk(BaseWidget):
             nx /= length
             ny /= length
             length = 1.0
-        deadzone = self._get_deadzone()
-        if length < deadzone:
+        scaled_length = self._apply_deadzone(length)
+        if scaled_length == 0:
             return (0.0, 0.0)
-        if deadzone > 0:
-            scaled_length = (length - deadzone) / (1.0 - deadzone)
-            scaled_length = max(0.0, min(scaled_length, 1.0))
-        else:
-            scaled_length = length
         nx = (nx / length) * scaled_length
         ny = (ny / length) * scaled_length
         return (nx, ny)
+
+    def _build_diagonal_contour(
+        self,
+        center_x: float,
+        center_y: float,
+        distances: tuple[int, int, int, int],
+        diagonals: dict[str, tuple[int, int]],
+        samples: int = 256,
+    ) -> list[tuple[float, float]]:
+        up, down, left, right = distances
+        points = [
+            (center_x, center_y - up),
+            (center_x + diagonals["ur"][0], center_y + diagonals["ur"][1]),
+            (center_x + right, center_y),
+            (center_x + diagonals["dr"][0], center_y + diagonals["dr"][1]),
+            (center_x, center_y + down),
+            (center_x + diagonals["dl"][0], center_y + diagonals["dl"][1]),
+            (center_x - left, center_y),
+            (center_x + diagonals["ul"][0], center_y + diagonals["ul"][1]),
+        ]
+        return self._catmull_rom_closed(points, samples)
+
+    @staticmethod
+    def _catmull_rom_closed(
+        points: list[tuple[float, float]], samples: int
+    ) -> list[tuple[float, float]]:
+        if len(points) < 4:
+            return points
+        total_samples = max(samples, len(points) * 4)
+        per_segment = max(1, total_samples // len(points))
+        spline: list[tuple[float, float]] = []
+        count = len(points)
+        for i in range(count):
+            p0 = points[(i - 1) % count]
+            p1 = points[i]
+            p2 = points[(i + 1) % count]
+            p3 = points[(i + 2) % count]
+            for step in range(per_segment):
+                t = step / per_segment
+                t2 = t * t
+                t3 = t2 * t
+                x = 0.5 * (
+                    2 * p1[0]
+                    + (-p0[0] + p2[0]) * t
+                    + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+                    + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+                )
+                y = 0.5 * (
+                    2 * p1[1]
+                    + (-p0[1] + p2[1]) * t
+                    + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+                    + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+                )
+                spline.append((x, y))
+        if spline and spline[0] != spline[-1]:
+            spline.append(spline[0])
+        return spline
+
+    @staticmethod
+    def _ray_intersection_distance(
+        origin: tuple[float, float],
+        direction: tuple[float, float],
+        contour: list[tuple[float, float]],
+    ) -> float | None:
+        if not contour or len(contour) < 2:
+            return None
+        ox, oy = origin
+        dx, dy = direction
+        min_t: float | None = None
+
+        def cross(ax: float, ay: float, bx: float, by: float) -> float:
+            return ax * by - ay * bx
+
+        for i in range(len(contour) - 1):
+            ax, ay = contour[i]
+            bx, by = contour[i + 1]
+            sx = bx - ax
+            sy = by - ay
+            rxs = cross(dx, dy, sx, sy)
+            if abs(rxs) < 1e-6:
+                continue
+            qpx = ax - ox
+            qpy = ay - oy
+            t = cross(qpx, qpy, sx, sy) / rxs
+            u = cross(qpx, qpy, dx, dy) / rxs
+            if t >= 0 and 0 <= u <= 1:
+                if min_t is None or t < min_t:
+                    min_t = t
+        return min_t
 
     def get_anchor_overlay_data(self) -> dict[str, object] | None:
         distances = self._get_anchor_distances()
@@ -1793,34 +2443,45 @@ class RightClickToWalk(BaseWidget):
             "left": (center_x - left, center_y),
             "right": (center_x + right, center_y),
         }
+        diagonals = self._get_diagonal_offsets(allow_default_init=True)
         points: list[tuple[float, float]] = []
-        segments = 256
-        # Smooth asymmetric superellipse boundary.
-        # p controls roundness (2.0 is ellipse, higher = squarer). k controls
-        # the softness of left/right and up/down blending.
-        p = min(4.0, max(2.0, 2.2))
-        k = min(10.0, max(1.0, 4.0))
+        if diagonals is not None:
+            points = self._build_diagonal_contour(center_x, center_y, distances, diagonals)
+        if not points:
+            segments = 256
+            # Smooth asymmetric superellipse boundary.
+            # p controls roundness (2.0 is ellipse, higher = squarer). k controls
+            # the softness of left/right and up/down blending.
+            p = min(4.0, max(2.0, 2.2))
+            k = min(10.0, max(1.0, 4.0))
 
-        def lerp(a: float, b: float, t: float) -> float:
-            return a + (b - a) * t
+            def lerp(a: float, b: float, t: float) -> float:
+                return a + (b - a) * t
 
-        for i in range(segments + 1):
-            rad = 2 * math.pi * i / segments
-            dx = math.cos(rad)
-            dy = math.sin(rad)
-            sx = 0.5 * (1.0 + math.tanh(k * dx))
-            sy = 0.5 * (1.0 + math.tanh(k * dy))
-            rx = lerp(left, right, sx)
-            ry = lerp(up, down, sy)
-            denom = (abs(dx) / rx) ** p + (abs(dy) / ry) ** p
-            r = 1.0 / (denom ** (1.0 / p))
-            x = center_x + r * dx
-            y = center_y + r * dy
-            points.append((x, y))
+            for i in range(segments + 1):
+                rad = 2 * math.pi * i / segments
+                dx = math.cos(rad)
+                dy = math.sin(rad)
+                sx = 0.5 * (1.0 + math.tanh(k * dx))
+                sy = 0.5 * (1.0 + math.tanh(k * dy))
+                rx = lerp(left, right, sx)
+                ry = lerp(up, down, sy)
+                denom = (abs(dx) / rx) ** p + (abs(dy) / ry) ** p
+                r = 1.0 / (denom ** (1.0 / p))
+                x = center_x + r * dx
+                y = center_y + r * dy
+                points.append((x, y))
+        diagonal_points = None
+        if diagonals is not None:
+            diagonal_points = {
+                key: (center_x + dx, center_y + dy)
+                for key, (dx, dy) in diagonals.items()
+            }
         return {
             "center": center,
             "anchors": anchors,
             "contour": points,
+            "diagonals": diagonal_points,
         }
 
     @staticmethod
@@ -1889,5 +2550,8 @@ class RightClickToWalk(BaseWidget):
     def set_mapping_mode(self, mapping_mode: bool) -> None:
         super().set_mapping_mode(mapping_mode)
         self._set_anchor_controls_visible(not mapping_mode)
+        self._set_diagonal_controls_visible(
+            self._are_anchor_distances_valid() and not mapping_mode
+        )
         if mapping_mode:
             self.cancel_anchor_set()
