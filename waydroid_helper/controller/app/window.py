@@ -21,7 +21,7 @@ gi.require_version("Gdk", "4.0")
 
 import asyncio
 
-from gi.repository import Adw, Gdk, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango
 from gi.events import GLibEventLoopPolicy
 
 from waydroid_helper.compat_widget import PropertyAnimationTarget
@@ -546,8 +546,10 @@ class TransparentWindow(Adw.Window):
 
         self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
+        self.active_settings_window: Gtk.Window | None = None
         self.active_settings_widget: object | None = None
         self.active_mask_layer: Gtk.Widget | None = None
+        self.settings_panel_state: dict[str, int] = {}
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -593,6 +595,10 @@ class TransparentWindow(Adw.Window):
     def _on_widget_settings_requested(self, event: "Event[bool]"):
         """Callback when a widget requests settings, pops up a Popover"""
         widget = event.source
+
+        if not self.mapping_mode:
+            self._open_settings_window(widget)
+            return
 
         popover = Gtk.Popover()
         popover.set_autohide(event.data)
@@ -822,6 +828,97 @@ class TransparentWindow(Adw.Window):
 
         popover.popup()
 
+    def _open_settings_window(self, widget: object) -> None:
+        if self.active_settings_window is not None:
+            self._close_settings_window()
+
+        if self.active_settings_popover is not None:
+            self.active_settings_popover.popdown()
+
+        config_manager = widget.get_config_manager()
+
+        settings_window = Adw.Window(transient_for=self, modal=False)
+        settings_window.set_title(f"{widget.WIDGET_NAME} {_('Settings')}")
+        settings_window.set_resizable(True)
+        settings_window.set_destroy_with_parent(True)
+
+        min_width = max(getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250), 420)
+        min_height = max(getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300), 360)
+        max_height = max(getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600), 720)
+        panel_width = max(self.settings_panel_state.get("width", min_width), min_width)
+        panel_height = max(self.settings_panel_state.get("height", min_height), min_height)
+        settings_window.set_default_size(panel_width, panel_height)
+
+        header_bar = Gtk.HeaderBar()
+        header_bar.set_show_title_buttons(True)
+        title_label = Gtk.Label()
+        title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
+        title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        header_bar.set_title_widget(title_label)
+        settings_window.set_titlebar(header_bar)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content_box.set_margin_top(12)
+        content_box.set_margin_start(12)
+        content_box.set_margin_end(12)
+        content_box.set_margin_bottom(12)
+
+        if not config_manager.configs:
+            label = Gtk.Label(label=_("This widget has no settings."))
+            content_box.append(label)
+        else:
+            try:
+                config_panel = widget.create_settings_panel()
+            except Exception as exc:
+                logger.error("Failed to build settings panel: %s", exc)
+                config_panel = Gtk.Label(
+                    label=_("Unable to load settings. Please reopen the panel.")
+                )
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.set_min_content_height(min_height)
+            scroller.set_max_content_height(max_height)
+            scroller.set_child(config_panel)
+            content_box.append(scroller)
+
+            confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
+            confirm_button.add_css_class("suggested-action")
+
+            def on_confirm_clicked(_btn):
+                config_manager.emit("confirmed")
+                self._close_settings_window()
+
+            confirm_button.connect("clicked", on_confirm_clicked)
+            content_box.append(confirm_button)
+
+        settings_window.set_content(content_box)
+
+        def on_window_size_allocate(_widget, allocation):
+            self.settings_panel_state["width"] = allocation.width
+            self.settings_panel_state["height"] = allocation.height
+
+        settings_window.connect("size-allocate", on_window_size_allocate)
+
+        def on_settings_window_close(_window):
+            config_manager.clear_ui_references()
+            if self.active_settings_window is _window:
+                self.active_settings_window = None
+                self.active_settings_panel = None
+                self.active_settings_widget = None
+            return False
+
+        settings_window.connect("close-request", on_settings_window_close)
+
+        self.active_settings_window = settings_window
+        self.active_settings_panel = content_box
+        self.active_settings_widget = widget
+        settings_window.present()
+
+    def _close_settings_window(self) -> None:
+        if self.active_settings_window is None:
+            return
+        self.active_settings_window.close()
+
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
         action = data.get("action")
@@ -864,6 +961,8 @@ class TransparentWindow(Adw.Window):
             return
         if self.active_settings_panel is not None:
             self.active_settings_panel.set_visible(visible)
+        if self.active_settings_window is not None:
+            self.active_settings_window.set_visible(visible)
         if self.active_settings_popover is not None:
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
@@ -1684,6 +1783,9 @@ class TransparentWindow(Adw.Window):
         if new_mode == self.MAPPING_MODE:
             # Enter mapping mode: cancel all selections, disable edit functions
             self.clear_all_selections()
+            self._close_settings_window()
+            if self.active_settings_popover is not None:
+                self.active_settings_popover.popdown()
 
             self.show_notification(_("Mapping Mode (F1: Switch Mode)"))
 
