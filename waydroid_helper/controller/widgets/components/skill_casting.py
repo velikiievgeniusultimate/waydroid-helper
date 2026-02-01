@@ -5,12 +5,13 @@
 """
 
 import asyncio
+import json
 import math
 import time
 from dataclasses import dataclass
 from enum import Enum
 from gettext import pgettext
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from waydroid_helper.controller.widgets.components.cancel_casting import \
     CancelCasting
@@ -73,12 +74,24 @@ class SkillEvent:
             self.timestamp = time.time()
 
 
+@dataclass
+class IdealCalibrationSample:
+    target_angle: float
+    target_radius: float
+    cursor_angle: float
+    cursor_radius: float
+
+
 @Editable
 @Resizable(resize_strategy=ResizableDecorator.RESIZE_CENTER)
 class SkillCasting(BaseWidget):
     """技能释放按钮组件 - 圆形半透明按钮"""
 
     # 组件元数据
+    SETTINGS_PANEL_AUTO_HIDE = False
+    SETTINGS_PANEL_MIN_WIDTH = 420
+    SETTINGS_PANEL_MIN_HEIGHT = 480
+    SETTINGS_PANEL_MAX_HEIGHT = 700
     WIDGET_NAME = pgettext("Controller Widgets", "Skill Casting")
     WIDGET_DESCRIPTION = pgettext(
         "Controller Widgets",
@@ -133,9 +146,23 @@ class SkillCasting(BaseWidget):
     APPLY_DIAGONALS_CONFIG_KEY = "skill_apply_diagonals"
     RESET_DIAGONALS_CONFIG_KEY = "skill_reset_diagonals"
     SHOW_DEBUG_BOUNDARY_CONFIG_KEY = "skill_show_debug_boundary"
+    IDEAL_CALIBRATION_SKILL_CONFIG_KEY = "skill_ideal_calibration_skill"
+    IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY = "skill_ideal_calibration_samples"
+    IDEAL_CALIBRATION_START_CONFIG_KEY = "skill_ideal_calibration_start"
+    IDEAL_CALIBRATION_STOP_CONFIG_KEY = "skill_ideal_calibration_stop"
+    IDEAL_CALIBRATION_RESET_CONFIG_KEY = "skill_ideal_calibration_reset"
+    IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY = "skill_ideal_calibration_confirm_yes"
+    IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY = "skill_ideal_calibration_confirm_no"
+    IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY = "skill_ideal_calibration_confirm_redo"
+    IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY = "skill_ideal_calibration_save_partial"
+    IDEAL_CALIBRATION_DATA_CONFIG_KEY = "skill_ideal_calibration_data"
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
+    DEFAULT_CAST_RADIUS = 200.0
+    IDEAL_CALIBRATION_SCALE_MIN = 0.5
+    IDEAL_CALIBRATION_SCALE_MAX = 2.0
+    IDEAL_CALIBRATION_TARGET_RATIO = 0.95
     ANCHOR_MAX_MULTIPLIER = 4
     DEADZONE_DEFAULT = 0.1
     DEADZONE_MAX = 0.95
@@ -249,15 +276,23 @@ class SkillCasting(BaseWidget):
         self._tuning_y_gain: float | None = None
         self._anchor_set_mode: str | None = None
         self._diag_warning_label: Gtk.Label | None = None
+        self._ideal_calibration_active: bool = False
+        self._ideal_calibration_skill: str = "Q"
+        self._ideal_calibration_samples_total: int = 16
+        self._ideal_calibration_targets: list[float] = []
+        self._ideal_calibration_index: int = 0
+        self._ideal_calibration_samples: list[IdealCalibrationSample] = []
+        self._ideal_calibration_pending_sample: IdealCalibrationSample | None = None
+        self._ideal_calibration_awaiting_confirmation: bool = False
+        self._ideal_calibration_status_label: Gtk.Label | None = None
+        self._ideal_calibration_progress_label: Gtk.Label | None = None
+        self._ideal_calibration_last_error: str = ""
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
 
         # 设置配置项
         self.setup_config()
-
-        # 监听选中状态变化，用于圆形绘制通知
-        self.connect("notify::is-selected", self._on_selection_changed)
 
         # 启动异步事件处理器
         self._start_event_processor()
@@ -541,6 +576,7 @@ class SkillCasting(BaseWidget):
     async def _release_skill(self):
         """释放技能"""
         self._emit_touch_event(AMotionEventAction.UP)
+        self._capture_ideal_calibration_sample()
         await self._reset_skill()
 
     async def _reset_skill(self):
@@ -563,18 +599,6 @@ class SkillCasting(BaseWidget):
 
     def setup_config(self) -> None:
         """设置配置项"""
-        circle_radius_config = create_slider_config(
-            key="circle_radius",
-            label=pgettext("Controller Widgets", "Casting Radius"),
-            value=200,
-            min_value=50,
-            max_value=500,
-            step=10,
-            description=pgettext(
-                "Controller Widgets",
-                "Fine-tune according to the casting range of different skills",
-            ),
-        )
         cast_timing_config = create_dropdown_config(
             key="cast_timing",
             label=pgettext("Controller Widgets", "Cast Timing"),
@@ -1013,8 +1037,105 @@ class SkillCasting(BaseWidget):
                 "Show the boundary/center debug overlay while editing this widget.",
             ),
         )
+        ideal_calibration_skill_config = create_dropdown_config(
+            key=self.IDEAL_CALIBRATION_SKILL_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Skill"),
+            options=["Q"],
+            option_labels={"Q": pgettext("Controller Widgets", "Q")},
+            value="Q",
+            description=pgettext(
+                "Controller Widgets",
+                "Select which skill key to calibrate (more options may be added later).",
+            ),
+        )
+        ideal_calibration_samples_config = create_dropdown_config(
+            key=self.IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Samples"),
+            options=["16", "32"],
+            option_labels={
+                "16": pgettext("Controller Widgets", "16 samples"),
+                "32": pgettext("Controller Widgets", "32 samples"),
+            },
+            value="16",
+            description=pgettext(
+                "Controller Widgets",
+                "Number of target points to capture during calibration.",
+            ),
+        )
+        ideal_calibration_start_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_START_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ideal Calibration"),
+            button_label=pgettext("Controller Widgets", "Start"),
+            description=pgettext(
+                "Controller Widgets",
+                "Start the ideal calibration wizard for the selected skill.",
+            ),
+        )
+        ideal_calibration_stop_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_STOP_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Stop Calibration"),
+            button_label=pgettext("Controller Widgets", "Stop"),
+            description=pgettext(
+                "Controller Widgets",
+                "Stop the current calibration session without saving.",
+            ),
+        )
+        ideal_calibration_save_partial_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Save Partial"),
+            button_label=pgettext("Controller Widgets", "Save Partial"),
+            description=pgettext(
+                "Controller Widgets",
+                "Save the samples collected so far and exit the wizard.",
+            ),
+        )
+        ideal_calibration_reset_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_RESET_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Calibration"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear the stored ideal calibration data for this skill.",
+            ),
+        )
+        ideal_calibration_confirm_yes_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Did it hit?"),
+            button_label=pgettext("Controller Widgets", "Yes"),
+            description=pgettext(
+                "Controller Widgets",
+                "Confirm that the cast landed on the target.",
+            ),
+        )
+        ideal_calibration_confirm_no_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Did it hit?"),
+            button_label=pgettext("Controller Widgets", "No"),
+            description=pgettext(
+                "Controller Widgets",
+                "Discard the sample and repeat the same target.",
+            ),
+        )
+        ideal_calibration_confirm_redo_config = create_action_config(
+            key=self.IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Did it hit?"),
+            button_label=pgettext("Controller Widgets", "Redo"),
+            description=pgettext(
+                "Controller Widgets",
+                "Redo the current target without saving the sample.",
+            ),
+        )
+        ideal_calibration_data_config = create_text_config(
+            key=self.IDEAL_CALIBRATION_DATA_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ideal Calibration Data"),
+            value="",
+            description=pgettext(
+                "Controller Widgets",
+                "Serialized ideal calibration data (stored per skill).",
+            ),
+            visible=False,
+        )
 
-        self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
         self.add_config_item(self.cancel_button_config)
         self.add_config_item(calibrate_center_config)
@@ -1066,8 +1187,17 @@ class SkillCasting(BaseWidget):
         self.add_config_item(apply_diagonals_config)
         self.add_config_item(reset_diagonals_config)
         self.add_config_item(show_debug_boundary_config)
+        self.add_config_item(ideal_calibration_skill_config)
+        self.add_config_item(ideal_calibration_samples_config)
+        self.add_config_item(ideal_calibration_start_config)
+        self.add_config_item(ideal_calibration_stop_config)
+        self.add_config_item(ideal_calibration_save_partial_config)
+        self.add_config_item(ideal_calibration_reset_config)
+        self.add_config_item(ideal_calibration_confirm_yes_config)
+        self.add_config_item(ideal_calibration_confirm_no_config)
+        self.add_config_item(ideal_calibration_confirm_redo_config)
+        self.add_config_item(ideal_calibration_data_config)
 
-        self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
         self.add_config_change_callback(
             "enable_cancel_button", self._on_cancel_button_config_changed
@@ -1120,12 +1250,49 @@ class SkillCasting(BaseWidget):
         self.add_config_change_callback(
             self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
         )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_SKILL_CONFIG_KEY,
+            self._on_ideal_calibration_skill_changed,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY,
+            self._on_ideal_calibration_samples_changed,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_START_CONFIG_KEY,
+            self._on_ideal_calibration_start_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_STOP_CONFIG_KEY,
+            self._on_ideal_calibration_stop_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY,
+            self._on_ideal_calibration_save_partial_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_RESET_CONFIG_KEY,
+            self._on_ideal_calibration_reset_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY,
+            self._on_ideal_calibration_confirm_yes_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY,
+            self._on_ideal_calibration_confirm_no_clicked,
+        )
+        self.add_config_change_callback(
+            self.IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY,
+            self._on_ideal_calibration_confirm_redo_clicked,
+        )
 
         self._sync_center_inputs()
         self._sync_gain_inputs()
         self._sync_anchor_inputs()
         self._ensure_diagonal_defaults()
         self._sync_diagonal_inputs()
+        self._sync_ideal_calibration_settings()
         self._set_gain_controls_visible(self._is_gain_enabled())
         self._set_anchor_controls_visible(not self.mapping_mode)
         self._set_diagonal_controls_visible(
@@ -1138,19 +1305,10 @@ class SkillCasting(BaseWidget):
                 self._sync_gain_inputs(),
                 self._sync_anchor_inputs(),
                 self._sync_diagonal_inputs(),
-                self._update_circle_if_selected(),
+                self._sync_ideal_calibration_settings(),
                 self._emit_overlay_event("refresh"),
             ),
         )
-
-    def _on_circle_radius_changed(self, key: str, value: int, restoring:bool) -> None:
-        """处理圆半径配置变更"""
-        try:
-            # self.circle_radius = int(value)
-            # 如果当前选中状态，重新发送圆形绘制事件
-            self._update_circle_if_selected()
-        except (ValueError, TypeError):
-            pass
 
     def _on_cast_timing_changed(self, key: str, value: str, restoring:bool) -> None:
         """处理施法时机配置变更"""
@@ -1229,7 +1387,7 @@ class SkillCasting(BaseWidget):
         panel.append(
             build_section(
                 pgettext("Controller Widgets", "Casting Behavior"),
-                ["circle_radius", "cast_timing", "enable_cancel_button"],
+                ["cast_timing", "enable_cancel_button"],
                 description=pgettext(
                     "Controller Widgets",
                     "Adjust how the skill is cast and whether a cancel button is shown.",
@@ -1350,9 +1508,42 @@ class SkillCasting(BaseWidget):
             )
         )
 
+        self._ideal_calibration_status_label = Gtk.Label(xalign=0)
+        self._ideal_calibration_status_label.set_wrap(True)
+        self._ideal_calibration_progress_label = Gtk.Label(xalign=0)
+        self._ideal_calibration_progress_label.set_wrap(True)
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Ideal Calibration Wizard"),
+                [
+                    self.IDEAL_CALIBRATION_SKILL_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_START_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_STOP_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_RESET_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY,
+                    self.IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Collect cast samples by confirming each target to build a correction map.",
+                ),
+                expanded=False,
+                extra_widgets=[
+                    self._ideal_calibration_status_label,
+                    self._ideal_calibration_progress_label,
+                ],
+            )
+        )
+
         tune_widget = config_manager.ui_widgets.get(self.TUNE_ANGLE_CONFIG_KEY)
         if tune_widget is not None:
             tune_widget.set_sensitive(self.mapping_mode)
+        self._update_ideal_calibration_labels()
+        self._update_ideal_calibration_controls()
 
         return panel
 
@@ -1559,8 +1750,82 @@ class SkillCasting(BaseWidget):
     ) -> None:
         if restoring:
             return
-        self._update_circle_if_selected()
         self._emit_overlay_event("refresh")
+
+    def _on_ideal_calibration_skill_changed(
+        self, key: str, value: str, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        if isinstance(value, str) and value:
+            self._ideal_calibration_skill = value
+        self._update_ideal_calibration_labels()
+
+    def _on_ideal_calibration_samples_changed(
+        self, key: str, value: str, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            return
+        if count not in (16, 32):
+            return
+        self._ideal_calibration_samples_total = count
+        self._update_ideal_calibration_labels()
+
+    def _on_ideal_calibration_start_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._start_ideal_calibration()
+
+    def _on_ideal_calibration_stop_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._stop_ideal_calibration(save_partial=False)
+
+    def _on_ideal_calibration_save_partial_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._stop_ideal_calibration(save_partial=True)
+
+    def _on_ideal_calibration_reset_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._clear_skill_calibration_map(self._ideal_calibration_skill)
+        self._ideal_calibration_last_error = ""
+        self._update_ideal_calibration_labels()
+        self._emit_overlay_event("refresh")
+
+    def _on_ideal_calibration_confirm_yes_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._confirm_ideal_calibration_sample(record=True)
+
+    def _on_ideal_calibration_confirm_no_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._confirm_ideal_calibration_sample(record=False)
+
+    def _on_ideal_calibration_confirm_redo_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._confirm_ideal_calibration_sample(record=False)
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
         data = event.data or {}
@@ -1668,6 +1933,18 @@ class SkillCasting(BaseWidget):
             str(values.get("ul", ("", ""))[1]) if "ul" in values else "",
         )
 
+    def _sync_ideal_calibration_settings(self) -> None:
+        skill = self.get_config_value(self.IDEAL_CALIBRATION_SKILL_CONFIG_KEY)
+        if isinstance(skill, str) and skill:
+            self._ideal_calibration_skill = skill
+        samples_value = self.get_config_value(self.IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY)
+        try:
+            samples = int(samples_value)
+        except (TypeError, ValueError):
+            samples = self._ideal_calibration_samples_total
+        if samples in (16, 32):
+            self._ideal_calibration_samples_total = samples
+
     def _are_anchor_distances_valid(self) -> bool:
         return self._get_anchor_distances() is not None
 
@@ -1759,6 +2036,273 @@ class SkillCasting(BaseWidget):
             return
         self._anchor_set_mode = None
         self._emit_overlay_event("stop")
+
+    def cancel_ideal_calibration(self) -> None:
+        if not self._ideal_calibration_active:
+            return
+        self._stop_ideal_calibration(save_partial=False)
+
+    def _start_ideal_calibration(self) -> None:
+        if self._ideal_calibration_active:
+            return
+        self._ideal_calibration_skill = str(
+            self.get_config_value(self.IDEAL_CALIBRATION_SKILL_CONFIG_KEY) or "Q"
+        )
+        samples_value = self.get_config_value(self.IDEAL_CALIBRATION_SAMPLES_CONFIG_KEY)
+        try:
+            samples = int(samples_value)
+        except (TypeError, ValueError):
+            samples = self._ideal_calibration_samples_total
+        if samples not in (16, 32):
+            samples = 16
+        self._ideal_calibration_samples_total = samples
+        self._ideal_calibration_targets = self._build_ideal_calibration_targets(samples)
+        self._ideal_calibration_index = 0
+        self._ideal_calibration_samples = []
+        self._ideal_calibration_pending_sample = None
+        self._ideal_calibration_awaiting_confirmation = False
+        self._ideal_calibration_last_error = ""
+        self._ideal_calibration_active = True
+        self._set_calibration_mode(False)
+        self.cancel_anchor_set()
+        self.cancel_tuning()
+        self._update_ideal_calibration_labels()
+        self._update_ideal_calibration_controls()
+        self._emit_overlay_event("refresh")
+
+    def _stop_ideal_calibration(self, save_partial: bool) -> None:
+        if not self._ideal_calibration_active:
+            return
+        if save_partial and self._ideal_calibration_samples:
+            self._finalize_ideal_calibration(self._ideal_calibration_samples)
+        self._ideal_calibration_active = False
+        self._ideal_calibration_targets = []
+        self._ideal_calibration_samples = []
+        self._ideal_calibration_index = 0
+        self._ideal_calibration_pending_sample = None
+        self._ideal_calibration_awaiting_confirmation = False
+        self._update_ideal_calibration_labels()
+        self._update_ideal_calibration_controls()
+        self._emit_overlay_event("refresh")
+
+    def _confirm_ideal_calibration_sample(self, record: bool) -> None:
+        if not self._ideal_calibration_active:
+            return
+        if not self._ideal_calibration_awaiting_confirmation:
+            return
+        if self._ideal_calibration_pending_sample is None:
+            return
+        if record:
+            self._ideal_calibration_samples.append(self._ideal_calibration_pending_sample)
+            self._ideal_calibration_index += 1
+            if self._ideal_calibration_index >= self._ideal_calibration_samples_total:
+                self._finalize_ideal_calibration(self._ideal_calibration_samples)
+                self._ideal_calibration_active = False
+                self._ideal_calibration_targets = []
+                self._ideal_calibration_samples = []
+                self._ideal_calibration_index = 0
+        self._ideal_calibration_pending_sample = None
+        self._ideal_calibration_awaiting_confirmation = False
+        self._update_ideal_calibration_labels()
+        self._update_ideal_calibration_controls()
+        self._emit_overlay_event("refresh")
+
+    def _finalize_ideal_calibration(self, samples: list[IdealCalibrationSample]) -> None:
+        if not samples:
+            return
+        map_data = self._build_ideal_calibration_map(samples)
+        if map_data:
+            self._set_skill_calibration_map(self._ideal_calibration_skill, map_data)
+            self._ideal_calibration_last_error = pgettext(
+                "Controller Widgets", "Ideal calibration saved."
+            )
+        else:
+            self._ideal_calibration_last_error = pgettext(
+                "Controller Widgets", "Unable to build calibration map."
+            )
+
+    def _build_ideal_calibration_targets(self, samples: int) -> list[float]:
+        if samples <= 0:
+            return []
+        step = 360.0 / samples
+        return [self._normalize_angle(i * step) for i in range(samples)]
+
+    def _get_boundary_radius_at_angle(self, angle: float) -> float:
+        distances = self._get_anchor_distances()
+        angle = self._normalize_angle(angle)
+        radians = math.radians(angle)
+        dx = math.cos(radians)
+        dy = math.sin(radians)
+        if distances is None:
+            return self.DEFAULT_CAST_RADIUS
+        up, down, left, right = distances
+        diagonals = self._get_diagonal_offsets(allow_default_init=True)
+        center_x, center_y = self._get_window_center()
+        if diagonals is not None:
+            contour = self._build_diagonal_contour(center_x, center_y, distances, diagonals)
+            distance = self._ray_intersection_distance((center_x, center_y), (dx, dy), contour)
+            if distance is not None and distance > 0:
+                return distance
+        rx = right if dx >= 0 else left
+        ry = down if dy >= 0 else up
+        if rx > 0 and ry > 0:
+            denom = (abs(dx) / rx) ** 2 + (abs(dy) / ry) ** 2
+            if denom > 0:
+                return 1.0 / math.sqrt(denom)
+        return self.DEFAULT_CAST_RADIUS
+
+    def _get_current_calibration_target(self) -> tuple[float, float, tuple[float, float]] | None:
+        if not self._ideal_calibration_targets or self._ideal_calibration_index >= len(self._ideal_calibration_targets):
+            return None
+        angle = self._ideal_calibration_targets[self._ideal_calibration_index]
+        radius = self._get_boundary_radius_at_angle(angle) * self.IDEAL_CALIBRATION_TARGET_RATIO
+        center_x, center_y = self._get_window_center()
+        radians = math.radians(angle)
+        target = (center_x + math.cos(radians) * radius, center_y + math.sin(radians) * radius)
+        return angle, radius, target
+
+    def _capture_ideal_calibration_sample(self) -> None:
+        if not self._ideal_calibration_active:
+            return
+        if self._ideal_calibration_awaiting_confirmation:
+            return
+        if self._skill_state == SkillState.CANCELING:
+            return
+        target = self._get_current_calibration_target()
+        if target is None:
+            return
+        target_angle, target_radius, _target_point = target
+        window_center_x, window_center_y = self._get_window_center()
+        rel_x = self._mouse_x - window_center_x
+        rel_y = self._mouse_y - window_center_y
+        x_gain, y_gain = self._get_gains()
+        rel_x *= x_gain
+        rel_y *= y_gain
+        cursor_radius = math.hypot(rel_x, rel_y)
+        if cursor_radius == 0:
+            return
+        cursor_angle = self._normalize_angle(self._vector_to_angle(rel_x, rel_y))
+        self._ideal_calibration_pending_sample = IdealCalibrationSample(
+            target_angle=target_angle,
+            target_radius=target_radius,
+            cursor_angle=cursor_angle,
+            cursor_radius=cursor_radius,
+        )
+        self._ideal_calibration_awaiting_confirmation = True
+        self._update_ideal_calibration_labels()
+        self._update_ideal_calibration_controls()
+        self._emit_overlay_event("refresh")
+
+    def _build_ideal_calibration_map(
+        self, samples: list[IdealCalibrationSample]
+    ) -> dict[str, object] | None:
+        if not samples:
+            return None
+        buckets: dict[float, list[IdealCalibrationSample]] = {}
+        for sample in samples:
+            angle = self._normalize_angle(sample.target_angle)
+            buckets.setdefault(angle, []).append(sample)
+        angles: list[float] = []
+        offsets: list[float] = []
+        scales: list[float] = []
+        for angle in sorted(buckets.keys()):
+            entries = buckets[angle]
+            if not entries:
+                continue
+            offset_values = []
+            scale_values = []
+            for entry in entries:
+                delta = self._normalize_angle_delta(entry.cursor_angle - entry.target_angle)
+                offset_values.append(delta)
+                if entry.target_radius > 0:
+                    scale = entry.cursor_radius / entry.target_radius
+                else:
+                    scale = 1.0
+                scale = max(self.IDEAL_CALIBRATION_SCALE_MIN, min(scale, self.IDEAL_CALIBRATION_SCALE_MAX))
+                scale_values.append(scale)
+            angles.append(angle)
+            offsets.append(sum(offset_values) / len(offset_values))
+            scales.append(sum(scale_values) / len(scale_values))
+        if not angles:
+            return None
+        return {
+            "bins": len(angles),
+            "angles": angles,
+            "angle_offsets": offsets,
+            "radius_scales": scales,
+        }
+
+    def _update_ideal_calibration_labels(self) -> None:
+        status_label = self._ideal_calibration_status_label
+        progress_label = self._ideal_calibration_progress_label
+        if status_label is None or progress_label is None:
+            return
+        if self._ideal_calibration_active:
+            status_label.set_label(
+                pgettext(
+                    "Controller Widgets",
+                    "Wizard active for skill {skill}. Cast to capture each target.",
+                ).format(skill=self._ideal_calibration_skill)
+            )
+            progress = pgettext(
+                "Controller Widgets", "Step {current}/{total}"
+            ).format(
+                current=min(self._ideal_calibration_index + 1, self._ideal_calibration_samples_total),
+                total=self._ideal_calibration_samples_total,
+            )
+            target = self._get_current_calibration_target()
+            if target is not None:
+                angle = target[0]
+                progress = f"{progress} · {angle:.0f}°"
+            if self._ideal_calibration_awaiting_confirmation:
+                progress = f"{progress} · {pgettext('Controller Widgets', 'Awaiting confirmation')}"
+            progress_label.set_label(progress)
+        else:
+            data = self._get_skill_calibration_map(self._ideal_calibration_skill)
+            if data:
+                status_label.set_label(
+                    pgettext(
+                        "Controller Widgets",
+                        "Calibration loaded for {skill} ({bins} bins).",
+                    ).format(skill=self._ideal_calibration_skill, bins=data.get("bins", 0))
+                )
+            else:
+                status_label.set_label(
+                    pgettext(
+                        "Controller Widgets",
+                        "No calibration data stored for {skill}.",
+                    ).format(skill=self._ideal_calibration_skill)
+                )
+            progress_label.set_label(self._ideal_calibration_last_error)
+
+    def _set_action_button_sensitive(self, key: str, sensitive: bool) -> None:
+        widget = self.get_config_manager().ui_widgets.get(key)
+        if widget is None:
+            return
+        button = widget.get_last_child()
+        if isinstance(button, Gtk.Button):
+            button.set_sensitive(sensitive)
+
+    def _update_ideal_calibration_controls(self) -> None:
+        manager = self.get_config_manager()
+        active = self._ideal_calibration_active
+        awaiting = self._ideal_calibration_awaiting_confirmation
+        manager.set_visible(self.IDEAL_CALIBRATION_START_CONFIG_KEY, not active)
+        manager.set_visible(self.IDEAL_CALIBRATION_STOP_CONFIG_KEY, active)
+        manager.set_visible(self.IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY, active)
+        manager.set_visible(self.IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY, active)
+        manager.set_visible(self.IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY, active)
+        manager.set_visible(self.IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY, active)
+        self._set_action_button_sensitive(
+            self.IDEAL_CALIBRATION_SAVE_PARTIAL_CONFIG_KEY,
+            active and bool(self._ideal_calibration_samples),
+        )
+        for key in (
+            self.IDEAL_CALIBRATION_CONFIRM_YES_CONFIG_KEY,
+            self.IDEAL_CALIBRATION_CONFIRM_NO_CONFIG_KEY,
+            self.IDEAL_CALIBRATION_CONFIRM_REDO_CONFIG_KEY,
+        ):
+            self._set_action_button_sensitive(key, awaiting)
 
     def is_debug_boundary_enabled(self) -> bool:
         raw = self.get_config_value(self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY)
@@ -2042,6 +2586,127 @@ class SkillCasting(BaseWidget):
         if not self._is_gain_enabled():
             return (self.GAIN_DEFAULT, self.GAIN_DEFAULT)
         return (x_gain, y_gain)
+
+    def _normalize_angle(self, angle: float) -> float:
+        angle = angle % 360.0
+        if angle < 0:
+            angle += 360.0
+        return angle
+
+    def _normalize_angle_delta(self, delta: float) -> float:
+        while delta > 180.0:
+            delta -= 360.0
+        while delta < -180.0:
+            delta += 360.0
+        return delta
+
+    def _get_calibration_store(self) -> dict[str, object]:
+        raw = self.get_config_value(self.IDEAL_CALIBRATION_DATA_CONFIG_KEY)
+        if not raw:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str):
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _set_calibration_store(self, data: dict[str, object]) -> None:
+        try:
+            payload = json.dumps(data, ensure_ascii=False)
+        except (TypeError, ValueError):
+            payload = ""
+        self.set_config_value(self.IDEAL_CALIBRATION_DATA_CONFIG_KEY, payload)
+
+    def _get_skill_calibration_map(self, skill: str) -> dict[str, object] | None:
+        data = self._get_calibration_store()
+        entry = data.get(skill)
+        return entry if isinstance(entry, dict) else None
+
+    def _set_skill_calibration_map(self, skill: str, map_data: dict[str, object]) -> None:
+        data = self._get_calibration_store()
+        data[skill] = map_data
+        self._set_calibration_store(data)
+
+    def _clear_skill_calibration_map(self, skill: str) -> None:
+        data = self._get_calibration_store()
+        if skill in data:
+            data.pop(skill, None)
+            self._set_calibration_store(data)
+
+    def _get_calibration_adjustment(self, angle: float) -> tuple[float, float]:
+        if self._ideal_calibration_active:
+            return (0.0, 1.0)
+        data = self._get_skill_calibration_map(self._ideal_calibration_skill)
+        if not data:
+            return (0.0, 1.0)
+        angles = data.get("angles")
+        offsets = data.get("angle_offsets")
+        scales = data.get("radius_scales")
+        if not (
+            isinstance(angles, list)
+            and isinstance(offsets, list)
+            and isinstance(scales, list)
+            and len(angles) == len(offsets) == len(scales)
+            and angles
+        ):
+            return (0.0, 1.0)
+        angle = self._normalize_angle(angle)
+        pairs = sorted(zip(angles, offsets, scales), key=lambda item: item[0])
+        angles_sorted = [p[0] for p in pairs]
+        offsets_sorted = [p[1] for p in pairs]
+        scales_sorted = [p[2] for p in pairs]
+        if angle <= angles_sorted[0]:
+            prev_angle = angles_sorted[-1] - 360.0
+            prev_offset = offsets_sorted[-1]
+            prev_scale = scales_sorted[-1]
+            next_angle = angles_sorted[0]
+            next_offset = offsets_sorted[0]
+            next_scale = scales_sorted[0]
+        elif angle >= angles_sorted[-1]:
+            prev_angle = angles_sorted[-1]
+            prev_offset = offsets_sorted[-1]
+            prev_scale = scales_sorted[-1]
+            next_angle = angles_sorted[0] + 360.0
+            next_offset = offsets_sorted[0]
+            next_scale = scales_sorted[0]
+        else:
+            prev_angle = angles_sorted[0]
+            prev_offset = offsets_sorted[0]
+            prev_scale = scales_sorted[0]
+            next_angle = angles_sorted[-1]
+            next_offset = offsets_sorted[-1]
+            next_scale = scales_sorted[-1]
+            for idx in range(len(angles_sorted) - 1):
+                if angles_sorted[idx] <= angle <= angles_sorted[idx + 1]:
+                    prev_angle = angles_sorted[idx]
+                    prev_offset = offsets_sorted[idx]
+                    prev_scale = scales_sorted[idx]
+                    next_angle = angles_sorted[idx + 1]
+                    next_offset = offsets_sorted[idx + 1]
+                    next_scale = scales_sorted[idx + 1]
+                    break
+        span = max(next_angle - prev_angle, 1e-6)
+        t = (angle - prev_angle) / span
+        offset = prev_offset + (next_offset - prev_offset) * t
+        scale = prev_scale + (next_scale - prev_scale) * t
+        return (offset, scale)
+
+    def _apply_ideal_calibration_to_vector(self, rel_x: float, rel_y: float) -> tuple[float, float]:
+        if rel_x == 0 and rel_y == 0:
+            return (0.0, 0.0)
+        angle = self._vector_to_angle(rel_x, rel_y)
+        radius = math.hypot(rel_x, rel_y)
+        offset, scale = self._get_calibration_adjustment(angle)
+        corrected_angle = math.radians(self._normalize_angle(angle + offset))
+        corrected_radius = radius * max(self.IDEAL_CALIBRATION_SCALE_MIN, min(scale, self.IDEAL_CALIBRATION_SCALE_MAX))
+        return (
+            math.cos(corrected_angle) * corrected_radius,
+            math.sin(corrected_angle) * corrected_radius,
+        )
 
     def _get_tuning_gains(self) -> tuple[float, float]:
         if self._tuning_mode and self._tuning_x_gain is not None and self._tuning_y_gain is not None:
@@ -2411,6 +3076,42 @@ class SkillCasting(BaseWidget):
         )
         return data
 
+    def get_ideal_calibration_overlay_data(self) -> dict[str, object] | None:
+        if not self._ideal_calibration_active:
+            return None
+        target = self._get_current_calibration_target()
+        if target is None:
+            return None
+        angle, _radius, point = target
+        title = pgettext(
+            "Controller Widgets", "Ideal Calibration ({skill})"
+        ).format(skill=self._ideal_calibration_skill)
+        progress = pgettext(
+            "Controller Widgets", "Step {current}/{total} · Target {angle}°"
+        ).format(
+            current=min(self._ideal_calibration_index + 1, self._ideal_calibration_samples_total),
+            total=self._ideal_calibration_samples_total,
+            angle=int(round(angle)),
+        )
+        instruction = pgettext(
+            "Controller Widgets",
+            "Move the cursor so the skill lands on the target, then cast/release.",
+        )
+        confirmation = pgettext(
+            "Controller Widgets",
+            "Did it hit the target? Confirm in settings (Yes / No / Redo).",
+        )
+        return {
+            "active": True,
+            "center": self._get_window_center(),
+            "target": point,
+            "title": title,
+            "progress": progress,
+            "instruction": instruction,
+            "awaiting_confirmation": self._ideal_calibration_awaiting_confirmation,
+            "confirmation": confirmation,
+        }
+
     # def _on_custom_event(self, event):
     #     """处理自定义事件"""
     #     logger.debug(f"SkillCasting {id(self)} received custom event: {event.data}")
@@ -2464,27 +3165,6 @@ class SkillCasting(BaseWidget):
     def on_delete(self):
         self._emit_overlay_event("unregister")
         super().on_delete()
-
-    def _update_circle_if_selected(self):
-        """如果当前组件被选中，更新圆形绘制"""
-        if self.is_selected and not self.mapping_mode and self.is_debug_boundary_enabled():
-            circle_data = {
-                "widget_id": id(self),
-                "widget_type": "skill_casting",
-                "circle_radius": self.get_config_value("circle_radius"),
-                "action": "show",
-            }
-        else:
-            circle_data = {
-                "widget_id": id(self),
-                "widget_type": "skill_casting",
-                "action": "hide",
-            }
-        self.event_bus.emit(Event(EventType.WIDGET_SELECTION_OVERLAY, self, circle_data))
-
-    def _on_selection_changed(self, widget, pspec):
-        """当选中状态变化时的回调"""
-        self._update_circle_if_selected()
 
     def draw_widget_content(self, cr: "Context[Surface]", width: int, height: int):
         """绘制圆形按钮的具体内容"""
@@ -2744,8 +3424,19 @@ class SkillCasting(BaseWidget):
         widget_center_y = self.center_y
         widget_radius = self.width / 2
 
+        rel_x = mouse_x - window_center_x
+        rel_y = mouse_y - window_center_y
+
+        x_gain, y_gain = self._get_gains()
+        rel_x *= x_gain
+        rel_y *= y_gain
+
+        rel_x, rel_y = self._apply_ideal_calibration_to_vector(rel_x, rel_y)
+        corrected_mouse_x = window_center_x + rel_x
+        corrected_mouse_y = window_center_y + rel_y
+
         anchor_vector = self._get_anchor_normalized_vector(
-            window_center_x, window_center_y, mouse_x, mouse_y
+            window_center_x, window_center_y, corrected_mouse_x, corrected_mouse_y
         )
         if anchor_vector is not None:
             nx, ny = anchor_vector
@@ -2754,16 +3445,7 @@ class SkillCasting(BaseWidget):
                 widget_center_y + ny * widget_radius,
             )
 
-        outer_radius = self.get_config_value("circle_radius")
-        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
-            outer_radius = 200
-
-        rel_x = mouse_x - window_center_x
-        rel_y = mouse_y - window_center_y
-
-        x_gain, y_gain = self._get_gains()
-        rel_x *= x_gain
-        rel_y *= y_gain
+        outer_radius = self.DEFAULT_CAST_RADIUS
 
         distance = math.sqrt(rel_x * rel_x + rel_y * rel_y)
 
@@ -2903,4 +3585,4 @@ class SkillCasting(BaseWidget):
         if mapping_mode:
             self.cancel_anchor_set()
             self.cancel_tuning()
-        self._update_circle_if_selected()
+        self._emit_overlay_event("refresh")
