@@ -1794,23 +1794,28 @@ class RightClickToWalk(BaseWidget):
             "right": (center_x + right, center_y),
         }
         points: list[tuple[float, float]] = []
-        radii = [right, down, left, up, right]
-        segments = 192
+        segments = 256
+        # Smooth asymmetric superellipse boundary.
+        # p controls roundness (2.0 is ellipse, higher = squarer). k controls
+        # the softness of left/right and up/down blending.
+        p = min(4.0, max(2.0, 2.2))
+        k = min(10.0, max(1.0, 4.0))
+
+        def lerp(a: float, b: float, t: float) -> float:
+            return a + (b - a) * t
+
         for i in range(segments + 1):
-            angle = 360 * i / segments
-            if angle >= 360:
-                angle = 0
-            quadrant = int(angle // 90)
-            local_angle = angle - (quadrant * 90)
-            t = local_angle / 90
-            # Smooth cosine interpolation between anchor radii.
-            # This keeps exact anchor distances while providing C1 continuity
-            # (zero slope at 0/90/180/270 degrees) to avoid visible corners.
-            smooth_t = 0.5 - 0.5 * math.cos(math.pi * t)
-            radius = radii[quadrant] + (radii[quadrant + 1] - radii[quadrant]) * smooth_t
-            rad = math.radians(angle)
-            x = center_x + math.cos(rad) * radius
-            y = center_y + math.sin(rad) * radius
+            rad = 2 * math.pi * i / segments
+            dx = math.cos(rad)
+            dy = math.sin(rad)
+            sx = 0.5 * (1.0 + math.tanh(k * dx))
+            sy = 0.5 * (1.0 + math.tanh(k * dy))
+            rx = lerp(left, right, sx)
+            ry = lerp(up, down, sy)
+            denom = (abs(dx) / rx) ** p + (abs(dy) / ry) ** p
+            r = 1.0 / (denom ** (1.0 / p))
+            x = center_x + r * dx
+            y = center_y + r * dy
             points.append((x, y))
         return {
             "center": center,
