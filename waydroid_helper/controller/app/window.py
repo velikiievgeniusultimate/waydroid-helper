@@ -21,7 +21,7 @@ gi.require_version("Gdk", "4.0")
 
 import asyncio
 
-from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk
 from gi.events import GLibEventLoopPolicy
 
 from waydroid_helper.compat_widget import PropertyAnimationTarget
@@ -491,13 +491,6 @@ class TransparentWindow(Adw.Window):
         self.fixed.set_name("mapping-widget")
         overlay.set_child(self.fixed)
 
-        self.settings_overlay = Gtk.Fixed.new()
-        self.settings_overlay.set_hexpand(True)
-        self.settings_overlay.set_vexpand(True)
-        self.settings_overlay.set_can_target(False)
-        self.settings_overlay.set_focusable(False)
-        overlay.add_overlay(self.settings_overlay)
-
         self.event_bus = EventBus()
 
         # Create mode switching hint
@@ -555,7 +548,6 @@ class TransparentWindow(Adw.Window):
         self.active_settings_panel: Gtk.Widget | None = None
         self.active_settings_widget: object | None = None
         self.active_mask_layer: Gtk.Widget | None = None
-        self.settings_panel_state: dict[str, int] = {}
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -601,10 +593,6 @@ class TransparentWindow(Adw.Window):
     def _on_widget_settings_requested(self, event: "Event[bool]"):
         """Callback when a widget requests settings, pops up a Popover"""
         widget = event.source
-
-        if not self.mapping_mode:
-            self._open_floating_settings_panel(widget)
-            return
 
         popover = Gtk.Popover()
         popover.set_autohide(event.data)
@@ -833,152 +821,6 @@ class TransparentWindow(Adw.Window):
         popover.set_position(Gtk.PositionType.BOTTOM)
 
         popover.popup()
-
-    def _open_floating_settings_panel(self, widget: object) -> None:
-        if self.active_settings_panel is not None:
-            self._close_floating_settings_panel()
-
-        if self.active_settings_popover is not None:
-            self.active_settings_popover.popdown()
-
-        config_manager = widget.get_config_manager()
-
-        panel_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        panel_container.add_css_class("floating-settings-panel")
-        panel_container.set_can_target(True)
-        panel_container.set_focusable(True)
-
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header.set_name("floating-settings-header")
-        header.set_hexpand(True)
-        header.set_margin_top(8)
-        header.set_margin_bottom(4)
-        header.set_margin_start(12)
-        header.set_margin_end(12)
-
-        title_label = Gtk.Label()
-        title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
-        title_label.set_halign(Gtk.Align.START)
-        title_label.set_hexpand(True)
-        title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        header.append(title_label)
-
-        close_button = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        close_button.set_tooltip_text(_("Close"))
-        close_button.add_css_class("flat")
-        close_button.set_halign(Gtk.Align.END)
-        header.append(close_button)
-
-        panel_container.append(header)
-
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        content_box.set_margin_start(12)
-        content_box.set_margin_end(12)
-        content_box.set_margin_bottom(12)
-
-        min_width = max(getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250), 420)
-        min_height = max(getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300), 360)
-        max_height = max(getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600), 720)
-        panel_width = max(self.settings_panel_state.get("width", min_width), min_width)
-        panel_height = self.settings_panel_state.get("height", -1)
-        panel_container.set_size_request(panel_width, panel_height)
-
-        if not config_manager.configs:
-            label = Gtk.Label(label=_("This widget has no settings."))
-            label.set_margin_top(8)
-            content_box.append(label)
-        else:
-            try:
-                config_panel = widget.create_settings_panel()
-            except Exception as exc:
-                logger.error("Failed to build settings panel: %s", exc)
-                config_panel = Gtk.Label(
-                    label=_("Unable to load settings. Please reopen the panel.")
-                )
-            scroller = Gtk.ScrolledWindow()
-            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            scroller.set_min_content_height(min_height)
-            scroller.set_max_content_height(max_height)
-            scroller.set_child(config_panel)
-            content_box.append(scroller)
-
-            confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
-            confirm_button.add_css_class("suggested-action")
-            content_box.append(confirm_button)
-
-            def on_confirm_clicked(_btn):
-                config_manager.emit("confirmed")
-                self._close_floating_settings_panel()
-
-            confirm_button.connect("clicked", on_confirm_clicked)
-
-        panel_container.append(content_box)
-
-        close_button.connect("clicked", lambda _btn: self._close_floating_settings_panel())
-
-        drag_controller = Gtk.GestureDrag.new()
-        drag_state: dict[str, float] = {"start_x": 0.0, "start_y": 0.0}
-
-        def on_drag_begin(_controller, _x, _y):
-            drag_state["start_x"] = float(self.settings_panel_state.get("x", 0))
-            drag_state["start_y"] = float(self.settings_panel_state.get("y", 0))
-
-        def on_drag_update(_controller, offset_x, offset_y):
-            target_x = int(drag_state["start_x"] + offset_x)
-            target_y = int(drag_state["start_y"] + offset_y)
-            panel_allocation = panel_container.get_allocation()
-            max_x = max(self.get_width() - panel_allocation.width, 0)
-            max_y = max(self.get_height() - panel_allocation.height, 0)
-            target_x = min(max(target_x, 0), max_x)
-            target_y = min(max(target_y, 0), max_y)
-            self.settings_overlay.move(panel_container, target_x, target_y)
-            self.settings_panel_state["x"] = target_x
-            self.settings_panel_state["y"] = target_y
-
-        drag_controller.connect("drag-begin", on_drag_begin)
-        drag_controller.connect("drag-update", on_drag_update)
-        header.add_controller(drag_controller)
-
-        def on_panel_size_allocate(_widget, allocation):
-            self.settings_panel_state["width"] = allocation.width
-            self.settings_panel_state["height"] = allocation.height
-
-        panel_container.connect("size-allocate", on_panel_size_allocate)
-
-        self.settings_overlay.put(panel_container, 0, 0)
-
-        def position_panel():
-            if self.active_settings_panel is not panel_container:
-                return GLib.SOURCE_REMOVE
-            allocation = panel_container.get_allocation()
-            if allocation.width <= 1 or allocation.height <= 1:
-                return GLib.SOURCE_CONTINUE
-            if "x" in self.settings_panel_state and "y" in self.settings_panel_state:
-                target_x = self.settings_panel_state["x"]
-                target_y = self.settings_panel_state["y"]
-            else:
-                target_x = max(int((self.get_width() - allocation.width) / 2), 0)
-                target_y = max(int((self.get_height() - allocation.height) / 2), 0)
-                self.settings_panel_state["x"] = target_x
-                self.settings_panel_state["y"] = target_y
-            self.settings_overlay.move(panel_container, target_x, target_y)
-            return GLib.SOURCE_REMOVE
-
-        self.active_settings_panel = panel_container
-        self.active_settings_widget = widget
-        GLib.idle_add(position_panel)
-
-    def _close_floating_settings_panel(self) -> None:
-        if self.active_settings_panel is None:
-            return
-        panel = self.active_settings_panel
-        if panel.get_parent() is self.settings_overlay:
-            self.settings_overlay.remove(panel)
-        if self.active_settings_widget is not None:
-            config_manager = self.active_settings_widget.get_config_manager()
-            config_manager.clear_ui_references()
-        self.active_settings_panel = None
-        self.active_settings_widget = None
 
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
@@ -1842,9 +1684,6 @@ class TransparentWindow(Adw.Window):
         if new_mode == self.MAPPING_MODE:
             # Enter mapping mode: cancel all selections, disable edit functions
             self.clear_all_selections()
-            self._close_floating_settings_panel()
-            if self.active_settings_popover is not None:
-                self.active_settings_popover.popdown()
 
             self.show_notification(_("Mapping Mode (F1: Switch Mode)"))
 
