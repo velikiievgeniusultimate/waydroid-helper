@@ -36,7 +36,6 @@ from waydroid_helper.controller.core.handler import (DefaultEventHandler,
                                                      KeyMappingEventHandler,
                                                      KeyMappingManager)
 from waydroid_helper.controller.ui.menus import ContextMenuManager
-from waydroid_helper.controller.ui.floating_panel import FloatingPanel
 from waydroid_helper.controller.ui.styles import StyleManager
 from waydroid_helper.controller.widgets.factory import WidgetFactory
 from waydroid_helper.util import AdbHelper, logger
@@ -509,38 +508,6 @@ class TransparentWindow(Adw.Window):
 
         overlay.add_overlay(self.notification_box)
 
-        self.adb_error_label = Gtk.Label.new("")
-        self.adb_error_label.set_wrap(True)
-        self.adb_error_label.set_justify(Gtk.Justification.CENTER)
-        self.adb_error_label.set_name("adb-error-label")
-
-        self.adb_error_box = Gtk.Box()
-        self.adb_error_box.set_name("adb-error-box")
-        self.adb_error_box.set_halign(Gtk.Align.CENTER)
-        self.adb_error_box.set_valign(Gtk.Align.START)
-        self.adb_error_box.set_margin_top(20)
-        self.adb_error_box.append(self.adb_error_label)
-        self.adb_error_box.set_visible(False)
-        self.adb_error_box.set_can_target(False)
-
-        overlay.add_overlay(self.adb_error_box)
-
-        self.settings_error_label = Gtk.Label.new("")
-        self.settings_error_label.set_wrap(True)
-        self.settings_error_label.set_justify(Gtk.Justification.CENTER)
-        self.settings_error_label.set_name("settings-error-label")
-
-        self.settings_error_box = Gtk.Box()
-        self.settings_error_box.set_name("settings-error-box")
-        self.settings_error_box.set_halign(Gtk.Align.CENTER)
-        self.settings_error_box.set_valign(Gtk.Align.START)
-        self.settings_error_box.set_margin_top(100)
-        self.settings_error_box.append(self.settings_error_label)
-        self.settings_error_box.set_visible(False)
-        self.settings_error_box.set_can_target(False)
-
-        overlay.add_overlay(self.settings_error_box)
-
         # Initialize components
         self.widget_factory = WidgetFactory()
         self.style_manager = StyleManager(self.get_display())
@@ -577,21 +544,10 @@ class TransparentWindow(Adw.Window):
         self.right_click_overlay = RightClickToWalkOverlay()
         overlay.add_overlay(self.right_click_overlay)
 
-        self.floating_settings_container = Gtk.Fixed.new()
-        self.floating_settings_container.set_name("floating-settings-container")
-        self.floating_settings_container.set_hexpand(True)
-        self.floating_settings_container.set_vexpand(True)
-        self.floating_settings_container.set_can_target(False)
-        overlay.add_overlay(self.floating_settings_container)
-
         self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
         self.active_settings_widget: object | None = None
         self.active_mask_layer: Gtk.Widget | None = None
-        self.floating_settings_panel: FloatingPanel | None = None
-        self.floating_settings_container: Gtk.Fixed | None = None
-        self._adb_error_visible = False
-        self._settings_error_visible = False
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -637,364 +593,234 @@ class TransparentWindow(Adw.Window):
     def _on_widget_settings_requested(self, event: "Event[bool]"):
         """Callback when a widget requests settings, pops up a Popover"""
         widget = event.source
-        widget_name = getattr(widget, "WIDGET_NAME", type(widget).__name__)
-        logger.info(
-            "Settings requested for widget=%s id=%s mode=%s",
-            widget_name,
-            id(widget),
-            self.current_mode,
-        )
-        handled = False
-        try:
-            if self.current_mode == self.EDIT_MODE:
-                logger.info("Settings UI path: floating panel (edit mode)")
-                self._open_floating_settings_panel(widget)
-                handled = True
-                return
-            logger.info("Settings UI path: popover (mapping mode)")
 
-            popover = Gtk.Popover()
-            popover.set_autohide(event.data)
+        popover = Gtk.Popover()
+        popover.set_autohide(event.data)
 
-            if not event.data:
-                # 当 autohide 为 false 时，创建遮罩层
-                overlay = self.get_content()
-                if isinstance(overlay, Gtk.Overlay):
-                    # 创建遮罩层
-                    mask_layer = Gtk.Box()
-                    mask_layer.set_hexpand(True)
-                    mask_layer.set_vexpand(True)
-                    mask_layer.set_name("mask-layer")
-                    mask_layer.set_visible(False)
-                    mask_layer.set_cursor_from_name("default")
-                    mask_layer.add_css_class("calibration-mask")
-                    mask_layer.set_opacity(0.0)
+        if not event.data:
+            # 当 autohide 为 false 时，创建遮罩层
+            overlay = self.get_content()
+            if isinstance(overlay, Gtk.Overlay):
+                # 创建遮罩层
+                mask_layer = Gtk.Box()
+                mask_layer.set_hexpand(True)
+                mask_layer.set_vexpand(True)
+                mask_layer.set_name("mask-layer")
+                mask_layer.set_visible(False)
+                mask_layer.set_cursor_from_name("default")
+                mask_layer.add_css_class("calibration-mask")
+                mask_layer.set_opacity(0.0)
 
-                    # 设置遮罩层样式，确保它覆盖整个窗口并阻止事件
-                    # mask_layer.set_css_classes(["modal-mask"])
-                    # mask_layer.set_opacity(0.01)  # 几乎透明但可见，确保能接收事件
+                # 设置遮罩层样式，确保它覆盖整个窗口并阻止事件
+                # mask_layer.set_css_classes(["modal-mask"])
+                # mask_layer.set_opacity(0.01)  # 几乎透明但可见，确保能接收事件
 
-                    # Allow the mask to be activated only during calibration.
-                    mask_layer.set_can_target(False)
-                    mask_layer.set_focusable(False)
+                # Allow the mask to be activated only during calibration.
+                mask_layer.set_can_target(False)
+                mask_layer.set_focusable(False)
 
-                    # 添加事件控制器，确保消费所有事件
-                    controllers = []
+                # 添加事件控制器，确保消费所有事件
+                controllers = []
 
-                    # 鼠标点击控制器
-                    click_controller = Gtk.GestureClick()
-                    click_controller.set_button(0)
+                # 鼠标点击控制器
+                click_controller = Gtk.GestureClick()
+                click_controller.set_button(0)
 
-                    def on_mask_clicked(controller, n_press, x, y):
-                        """遮罩层点击事件处理"""
-                        self.event_bus.emit(
-                            Event(EventType.MASK_CLICKED, self, {"x": int(x), "y": int(y)})
-                        )
+                def on_mask_clicked(controller, n_press, x, y):
+                    """遮罩层点击事件处理"""
+                    self.event_bus.emit(
+                        Event(EventType.MASK_CLICKED, self, {"x": int(x), "y": int(y)})
+                    )
 
-                        # 关键：停止事件传播
-                        controller.set_state(Gtk.EventSequenceState.CLAIMED)
-                        return True
+                    # 关键：停止事件传播
+                    controller.set_state(Gtk.EventSequenceState.CLAIMED)
+                    return True
 
-                    click_controller.connect("pressed", on_mask_clicked)
-                    click_controller.connect("released", lambda c, n, x, y: True)
-                    mask_layer.add_controller(click_controller)
-                    controllers.append(click_controller)
+                click_controller.connect("pressed", on_mask_clicked)
+                click_controller.connect("released", lambda c, n, x, y: True)
+                mask_layer.add_controller(click_controller)
+                controllers.append(click_controller)
 
-                    motion_controller = Gtk.EventControllerMotion.new()
+                motion_controller = Gtk.EventControllerMotion.new()
 
-                    def on_mask_motion(_controller, x, y):
+                def on_mask_motion(_controller, x, y):
+                    if (
+                        self.right_click_overlay.active_widget is not None
+                        and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
+                    ):
+                        self.right_click_overlay.update_cursor((int(x), int(y)))
+
+                motion_controller.connect("motion", on_mask_motion)
+                mask_layer.add_controller(motion_controller)
+                controllers.append(motion_controller)
+
+                key_controller = Gtk.EventControllerKey.new()
+
+                def on_mask_key_press(_controller, keyval, keycode, state):
+                    if keyval == Gdk.KEY_Escape:
+                        widget_to_cancel = self.active_settings_widget
                         if (
                             self.right_click_overlay.active_widget is not None
                             and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
                         ):
-                            self.right_click_overlay.update_cursor((int(x), int(y)))
+                            widget_to_cancel = self.right_click_overlay.active_widget
+                        if widget_to_cancel is None:
+                            return False
+                        cancel = getattr(widget_to_cancel, "cancel_calibration", None)
+                        if callable(cancel) and getattr(widget_to_cancel, "is_calibrating", False):
+                            cancel()
+                            return True
+                        cancel_anchor_set = getattr(widget_to_cancel, "cancel_anchor_set", None)
+                        if callable(cancel_anchor_set):
+                            cancel_anchor_set()
+                            return True
+                    return False
 
-                    motion_controller.connect("motion", on_mask_motion)
-                    mask_layer.add_controller(motion_controller)
-                    controllers.append(motion_controller)
+                key_controller.connect("key-pressed", on_mask_key_press)
+                mask_layer.add_controller(key_controller)
+                controllers.append(key_controller)
 
-                    key_controller = Gtk.EventControllerKey.new()
-
-                    def on_mask_key_press(_controller, keyval, keycode, state):
-                        if keyval == Gdk.KEY_Escape:
-                            widget_to_cancel = self.active_settings_widget
-                            if (
-                                self.right_click_overlay.active_widget is not None
-                                and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
-                            ):
-                                widget_to_cancel = self.right_click_overlay.active_widget
-                            if widget_to_cancel is None:
-                                return False
-                            cancel = getattr(widget_to_cancel, "cancel_calibration", None)
-                            if callable(cancel) and getattr(widget_to_cancel, "is_calibrating", False):
-                                cancel()
-                                return True
-                            cancel_anchor_set = getattr(widget_to_cancel, "cancel_anchor_set", None)
-                            if callable(cancel_anchor_set):
-                                cancel_anchor_set()
-                                return True
-                        return False
-
-                    key_controller.connect("key-pressed", on_mask_key_press)
-                    mask_layer.add_controller(key_controller)
-                    controllers.append(key_controller)
-
-                    def disable_window_controllers():
-                        """临时禁用窗口级别的控制器"""
-                        # 获取窗口的所有控制器
-                        window_controllers = []
-                        for controller in self.observe_controllers():
-                            if isinstance(
-                                controller,
-                                (
-                                    Gtk.EventControllerKey,
-                                    Gtk.GestureClick,
-                                    Gtk.EventControllerMotion,
-                                    Gtk.EventControllerScroll,
-                                ),
-                            ):
-                                original_state = controller.get_propagation_phase()
-                                controller.set_propagation_phase(Gtk.PropagationPhase.NONE)
-                                window_controllers.append((controller, original_state))
-                        return window_controllers
-
-                    def restore_window_controllers(window_controllers):
-                        """恢复窗口级别的控制器"""
-                        for controller, original_state in window_controllers:
-                            controller.set_propagation_phase(original_state)
-
-                    # 禁用窗口控制器
-                    disabled_controllers = disable_window_controllers()
-
-                    overlay.add_overlay(mask_layer)
-                    mask_layer.set_visible(True)
-                    self.active_mask_layer = mask_layer
-
-                    # 设置弹出窗口关闭时的清理逻辑
-                    async def on_popover_closed_with_mask(p):
-                        """弹出窗口关闭时的清理"""
-                        # 恢复窗口控制器
-                        restore_window_controllers(disabled_controllers)
-
-                        if mask_layer.get_parent():
-                            overlay.remove_overlay(mask_layer)
-                        if self.active_mask_layer is mask_layer:
-                            self.active_mask_layer = None
-                        if self.active_settings_popover is p:
-                            self.active_settings_popover = None
-                            self.active_settings_panel = None
-                            self.active_settings_widget = None
-
-                        # 清理UI引用
-                        config_manager = widget.get_config_manager()
-                        config_manager.clear_ui_references()
-                        p.unparent()
-
-                    popover.connect(
-                        "closed",
-                        lambda w: asyncio.create_task(on_popover_closed_with_mask(w)),
-                    )
-            else:
-                # 原有的 autohide 为 true 的逻辑
-                def workaround_popover_auto_hide(controller, n_press, x, y):
-                    if popover.get_visible() and popover.get_autohide():
-                        if (
-                            x < 0
-                            or y < 0
-                            or x > popover.get_width()
-                            or y > popover.get_height()
+                def disable_window_controllers():
+                    """临时禁用窗口级别的控制器"""
+                    # 获取窗口的所有控制器
+                    window_controllers = []
+                    for controller in self.observe_controllers():
+                        if isinstance(
+                            controller,
+                            (
+                                Gtk.EventControllerKey,
+                                Gtk.GestureClick,
+                                Gtk.EventControllerMotion,
+                                Gtk.EventControllerScroll,
+                            ),
                         ):
-                            popover.popdown()
+                            original_state = controller.get_propagation_phase()
+                            controller.set_propagation_phase(Gtk.PropagationPhase.NONE)
+                            window_controllers.append((controller, original_state))
+                    return window_controllers
 
-                click_controller = Gtk.GestureClick()
-                click_controller.connect("pressed", workaround_popover_auto_hide)
-                popover.add_controller(click_controller)
+                def restore_window_controllers(window_controllers):
+                    """恢复窗口级别的控制器"""
+                    for controller, original_state in window_controllers:
+                        controller.set_propagation_phase(original_state)
 
-                def on_popover_closed(p):
-                    config_manager = widget.get_config_manager()
-                    config_manager.clear_ui_references()
-                    p.unparent()
-                    self.queue_draw()
+                # 禁用窗口控制器
+                disabled_controllers = disable_window_controllers()
+
+                overlay.add_overlay(mask_layer)
+                mask_layer.set_visible(True)
+                self.active_mask_layer = mask_layer
+
+                # 设置弹出窗口关闭时的清理逻辑
+                async def on_popover_closed_with_mask(p):
+                    """弹出窗口关闭时的清理"""
+                    # 恢复窗口控制器
+                    restore_window_controllers(disabled_controllers)
+
+                    if mask_layer.get_parent():
+                        overlay.remove_overlay(mask_layer)
+                    if self.active_mask_layer is mask_layer:
+                        self.active_mask_layer = None
                     if self.active_settings_popover is p:
                         self.active_settings_popover = None
                         self.active_settings_panel = None
                         self.active_settings_widget = None
 
-                popover.connect("closed", on_popover_closed)
+                    # 清理UI引用
+                    config_manager = widget.get_config_manager()
+                    config_manager.clear_ui_references()
+                    p.unparent()
 
-            popover.set_parent(self)
-
-            main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            min_width = getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250)
-            min_height = getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
-            max_height = getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
-            main_box.set_size_request(min_width, -1)
-            popover.set_child(main_box)
-            self.active_settings_popover = popover
-            self.active_settings_panel = main_box
-            self.active_settings_widget = widget
-
-            title_label = Gtk.Label()
-            title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
-            title_label.set_halign(Gtk.Align.CENTER)
-            main_box.append(title_label)
-
-            config_manager = widget.get_config_manager()
-
-            if not config_manager.configs:
-                label = Gtk.Label(label=_("This widget has no settings."))
-                main_box.append(label)
-            else:
-                try:
-                    config_panel = widget.create_settings_panel()
-                except Exception as exc:
-                    logger.error("Failed to build settings panel: %s", exc)
-                    config_panel = Gtk.Label(
-                        label=_("Unable to load settings. Please reopen the panel.")
-                    )
-                scroller = Gtk.ScrolledWindow()
-                scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-                scroller.set_min_content_height(min_height)
-                scroller.set_max_content_height(max_height)
-                scroller.set_child(config_panel)
-                main_box.append(scroller)
-
-                confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
-                confirm_button.add_css_class("suggested-action")
-
-                def on_confirm_clicked(btn):
-                    config_manager.emit("confirmed")
-                    popover.popdown()
-
-                confirm_button.connect("clicked", on_confirm_clicked)
-                main_box.append(confirm_button)
-
-            settings_button_rect = Gdk.Rectangle()
-            bounds = widget.get_settings_button_bounds()
-            settings_button_rect.x = bounds[0] + widget.x
-            settings_button_rect.y = bounds[1] + widget.y
-            settings_button_rect.width = bounds[2]
-            settings_button_rect.height = bounds[3]
-
-            popover.set_pointing_to(settings_button_rect)
-            popover.set_position(Gtk.PositionType.BOTTOM)
-
-            popover.popup()
-            handled = True
-        except Exception:
-            logger.exception(
-                "Failed to open settings for widget=%s id=%s mode=%s",
-                widget_name,
-                id(widget),
-                self.current_mode,
-            )
-            GLib.idle_add(
-                self._show_settings_error_banner,
-                _("Failed to open settings, see logs."),
-            )
-        finally:
-            logger.info(
-                "Settings request completed for widget=%s id=%s mode=%s handled=%s",
-                widget_name,
-                id(widget),
-                self.current_mode,
-                handled,
-            )
-
-    def _open_floating_settings_panel(self, widget) -> None:
-        if self.floating_settings_container is None:
-            return
-        if self.floating_settings_panel is None:
-            def bounds_provider() -> tuple[int, int]:
-                return (
-                    self.get_allocated_width(),
-                    self.get_allocated_height(),
+                popover.connect(
+                    "closed",
+                    lambda w: asyncio.create_task(on_popover_closed_with_mask(w)),
                 )
+        else:
+            # 原有的 autohide 为 true 的逻辑
+            def workaround_popover_auto_hide(controller, n_press, x, y):
+                if popover.get_visible() and popover.get_autohide():
+                    if (
+                        x < 0
+                        or y < 0
+                        or x > popover.get_width()
+                        or y > popover.get_height()
+                    ):
+                        popover.popdown()
 
-            def position_callback(x: int, y: int) -> None:
-                if self.floating_settings_container and self.floating_settings_panel:
-                    self.floating_settings_container.move(
-                        self.floating_settings_panel, x, y
-                    )
+            click_controller = Gtk.GestureClick()
+            click_controller.connect("pressed", workaround_popover_auto_hide)
+            popover.add_controller(click_controller)
 
-            def handle_close() -> None:
-                self._close_floating_settings_panel()
+            def on_popover_closed(p):
+                config_manager = widget.get_config_manager()
+                config_manager.clear_ui_references()
+                p.unparent()
+                self.queue_draw()
+                if self.active_settings_popover is p:
+                    self.active_settings_popover = None
+                    self.active_settings_panel = None
+                    self.active_settings_widget = None
 
-            self.floating_settings_panel = FloatingPanel(
-                title=f"{widget.WIDGET_NAME} {_('Settings')}",
-                on_close=handle_close,
-                bounds_provider=bounds_provider,
-                position_callback=position_callback,
-                min_width=getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 260),
-                min_height=getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300),
-                max_height=getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600),
-            )
-            self.floating_settings_container.put(self.floating_settings_panel, 0, 0)
-            self.floating_settings_panel.set_can_target(True)
+            popover.connect("closed", on_popover_closed)
 
-        self.active_settings_widget = widget
-        self.active_settings_panel = self.floating_settings_panel
-        self.active_settings_popover = None
+        popover.set_parent(self)
 
-        panel_body = self._build_settings_panel_body(widget, in_floating_panel=True)
-        self.floating_settings_panel.set_title(
-            f"{widget.WIDGET_NAME} {_('Settings')}"
-        )
-        self.floating_settings_panel.set_body(panel_body)
-        self.floating_settings_panel.set_visible(True)
-        self.floating_settings_panel.ensure_centered()
-
-    def _build_settings_panel_body(
-        self, widget, in_floating_panel: bool = False
-    ) -> Gtk.Widget:
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        min_width = getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 250)
+        min_height = getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
+        max_height = getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
+        main_box.set_size_request(min_width, -1)
+        popover.set_child(main_box)
+        self.active_settings_popover = popover
+        self.active_settings_panel = main_box
+        self.active_settings_widget = widget
+
+        title_label = Gtk.Label()
+        title_label.set_markup(f"<b>{widget.WIDGET_NAME} {_('Settings')}</b>")
+        title_label.set_halign(Gtk.Align.CENTER)
+        main_box.append(title_label)
+
         config_manager = widget.get_config_manager()
+
         if not config_manager.configs:
             label = Gtk.Label(label=_("This widget has no settings."))
             main_box.append(label)
-            return main_box
-        try:
-            config_panel = widget.create_settings_panel()
-        except Exception as exc:
-            logger.error("Failed to build settings panel: %s", exc)
-            config_panel = Gtk.Label(
-                label=_("Unable to load settings. Please reopen the panel.")
-            )
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroller.set_min_content_height(
-            getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
-        )
-        scroller.set_max_content_height(
-            getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
-        )
-        scroller.set_child(config_panel)
-        main_box.append(scroller)
+        else:
+            try:
+                config_panel = widget.create_settings_panel()
+            except Exception as exc:
+                logger.error("Failed to build settings panel: %s", exc)
+                config_panel = Gtk.Label(
+                    label=_("Unable to load settings. Please reopen the panel.")
+                )
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.set_min_content_height(min_height)
+            scroller.set_max_content_height(max_height)
+            scroller.set_child(config_panel)
+            main_box.append(scroller)
 
-        confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
-        confirm_button.add_css_class("suggested-action")
+            confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
+            confirm_button.add_css_class("suggested-action")
 
-        def on_confirm_clicked(_btn):
-            config_manager.emit("confirmed")
-            if in_floating_panel:
-                self._close_floating_settings_panel()
+            def on_confirm_clicked(btn):
+                config_manager.emit("confirmed")
+                popover.popdown()
 
-        confirm_button.connect("clicked", on_confirm_clicked)
-        main_box.append(confirm_button)
-        return main_box
+            confirm_button.connect("clicked", on_confirm_clicked)
+            main_box.append(confirm_button)
 
-    def _close_floating_settings_panel(self) -> None:
-        if self.floating_settings_container is None or self.floating_settings_panel is None:
-            return
-        config_manager = None
-        if self.active_settings_widget is not None:
-            config_manager = self.active_settings_widget.get_config_manager()
-        if config_manager is not None:
-            config_manager.clear_ui_references()
-        self.floating_settings_container.remove(self.floating_settings_panel)
-        self.floating_settings_panel = None
-        self.active_settings_panel = None
-        self.active_settings_widget = None
+        settings_button_rect = Gdk.Rectangle()
+        bounds = widget.get_settings_button_bounds()
+        settings_button_rect.x = bounds[0] + widget.x
+        settings_button_rect.y = bounds[1] + widget.y
+        settings_button_rect.width = bounds[2]
+        settings_button_rect.height = bounds[3]
+
+        popover.set_pointing_to(settings_button_rect)
+        popover.set_position(Gtk.PositionType.BOTTOM)
+
+        popover.popup()
 
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
@@ -1036,9 +862,9 @@ class TransparentWindow(Adw.Window):
     def _set_settings_panel_visible(self, visible: bool, widget: object | None) -> None:
         if widget is None or self.active_settings_widget is not widget:
             return
+        if self.active_settings_panel is not None:
+            self.active_settings_panel.set_visible(visible)
         if self.active_settings_popover is not None:
-            if self.active_settings_panel is not None:
-                self.active_settings_panel.set_visible(visible)
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
 
@@ -1105,10 +931,6 @@ class TransparentWindow(Adw.Window):
             try:
                 # 1. Connect to ADB device first
                 if not await self.adb_helper.connect():
-                    logger.warning(
-                        "ADB connection failed; continuing without device. Settings UI remains available."
-                    )
-                    self._apply_resolution_fallback()
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
                     continue
 
@@ -1116,8 +938,6 @@ class TransparentWindow(Adw.Window):
                 screen_resolution = await self.adb_helper.get_screen_resolution()
                 if screen_resolution:
                     ScreenInfo().set_resolution(screen_resolution[0], screen_resolution[1])
-                else:
-                    self._apply_resolution_fallback()
 
                 # 3. Push server to device
                 if not await self.adb_helper.push_scrcpy_server():
@@ -1143,61 +963,6 @@ class TransparentWindow(Adw.Window):
                 return  # Use return to exit immediately on cancellation
             except Exception as e:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
-        logger.warning(
-            "ADB setup failed after retries; continuing without device connectivity."
-        )
-
-    def _apply_resolution_fallback(self) -> None:
-        screen_info = ScreenInfo()
-        device_width, device_height = screen_info.get_resolution()
-        if device_width > 0 and device_height > 0:
-            logger.warning(
-                "Device resolution unavailable; keeping last known resolution %sx%s.",
-                device_width,
-                device_height,
-            )
-            GLib.idle_add(
-                self._show_adb_error_banner,
-                _("Device resolution unavailable; using last known resolution."),
-            )
-            return
-
-        host_width, host_height = screen_info.get_host_resolution()
-        if host_width == 0 or host_height == 0:
-            host_width = self.get_allocated_width()
-            host_height = self.get_allocated_height()
-
-        if host_width > 0 and host_height > 0:
-            screen_info.set_resolution(host_width, host_height)
-            logger.warning(
-                "Device resolution unavailable; falling back to host size %sx%s.",
-                host_width,
-                host_height,
-            )
-            GLib.idle_add(
-                self._show_adb_error_banner,
-                _("Device resolution unavailable; using host window size."),
-            )
-        else:
-            logger.warning(
-                "Device resolution unavailable and host size unknown; settings may be inaccurate."
-            )
-            GLib.idle_add(
-                self._show_adb_error_banner,
-                _("Device resolution unavailable; using default sizing."),
-            )
-
-    def _show_adb_error_banner(self, message: str) -> None:
-        self.adb_error_label.set_label(message)
-        if not self._adb_error_visible:
-            self.adb_error_box.set_visible(True)
-            self._adb_error_visible = True
-
-    def _show_settings_error_banner(self, message: str) -> None:
-        self.settings_error_label.set_label(message)
-        if not self._settings_error_visible:
-            self.settings_error_box.set_visible(True)
-            self._settings_error_visible = True
 
 
     def setup_mode_system(self):
@@ -1919,7 +1684,6 @@ class TransparentWindow(Adw.Window):
         if new_mode == self.MAPPING_MODE:
             # Enter mapping mode: cancel all selections, disable edit functions
             self.clear_all_selections()
-            self._close_floating_settings_panel()
 
             self.show_notification(_("Mapping Mode (F1: Switch Mode)"))
 
