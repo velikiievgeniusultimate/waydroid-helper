@@ -190,6 +190,8 @@ class WaydroidHelperApplication(Adw.Application):
 
 def main(version: str):
     """The application's entry point."""
+    from waydroid_helper.util.log import logger
+    logger.info("waydroid-helper main() entered")
     asyncio.set_event_loop_policy(
         GLibEventLoopPolicy()  # pyright:ignore[reportUnknownArgumentType]
     )
