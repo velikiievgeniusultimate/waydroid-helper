@@ -36,6 +36,7 @@ from waydroid_helper.controller.core.handler import (DefaultEventHandler,
                                                      KeyMappingEventHandler,
                                                      KeyMappingManager)
 from waydroid_helper.controller.ui.menus import ContextMenuManager
+from waydroid_helper.controller.ui.floating_panel import FloatingPanel
 from waydroid_helper.controller.ui.styles import StyleManager
 from waydroid_helper.controller.widgets.factory import WidgetFactory
 from waydroid_helper.util import AdbHelper, logger
@@ -508,6 +509,22 @@ class TransparentWindow(Adw.Window):
 
         overlay.add_overlay(self.notification_box)
 
+        self.adb_error_label = Gtk.Label.new("")
+        self.adb_error_label.set_wrap(True)
+        self.adb_error_label.set_justify(Gtk.Justification.CENTER)
+        self.adb_error_label.set_name("adb-error-label")
+
+        self.adb_error_box = Gtk.Box()
+        self.adb_error_box.set_name("adb-error-box")
+        self.adb_error_box.set_halign(Gtk.Align.CENTER)
+        self.adb_error_box.set_valign(Gtk.Align.START)
+        self.adb_error_box.set_margin_top(20)
+        self.adb_error_box.append(self.adb_error_label)
+        self.adb_error_box.set_visible(False)
+        self.adb_error_box.set_can_target(False)
+
+        overlay.add_overlay(self.adb_error_box)
+
         # Initialize components
         self.widget_factory = WidgetFactory()
         self.style_manager = StyleManager(self.get_display())
@@ -544,10 +561,20 @@ class TransparentWindow(Adw.Window):
         self.right_click_overlay = RightClickToWalkOverlay()
         overlay.add_overlay(self.right_click_overlay)
 
+        self.floating_settings_container = Gtk.Fixed.new()
+        self.floating_settings_container.set_name("floating-settings-container")
+        self.floating_settings_container.set_hexpand(True)
+        self.floating_settings_container.set_vexpand(True)
+        self.floating_settings_container.set_can_target(False)
+        overlay.add_overlay(self.floating_settings_container)
+
         self.active_settings_popover: Gtk.Popover | None = None
         self.active_settings_panel: Gtk.Widget | None = None
         self.active_settings_widget: object | None = None
         self.active_mask_layer: Gtk.Widget | None = None
+        self.floating_settings_panel: FloatingPanel | None = None
+        self.floating_settings_container: Gtk.Fixed | None = None
+        self._adb_error_visible = False
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
@@ -593,6 +620,9 @@ class TransparentWindow(Adw.Window):
     def _on_widget_settings_requested(self, event: "Event[bool]"):
         """Callback when a widget requests settings, pops up a Popover"""
         widget = event.source
+        if self.current_mode == self.EDIT_MODE:
+            self._open_floating_settings_panel(widget)
+            return
 
         popover = Gtk.Popover()
         popover.set_autohide(event.data)
@@ -822,6 +852,101 @@ class TransparentWindow(Adw.Window):
 
         popover.popup()
 
+    def _open_floating_settings_panel(self, widget) -> None:
+        if self.floating_settings_container is None:
+            return
+        if self.floating_settings_panel is None:
+            def bounds_provider() -> tuple[int, int]:
+                return (
+                    self.get_allocated_width(),
+                    self.get_allocated_height(),
+                )
+
+            def position_callback(x: int, y: int) -> None:
+                if self.floating_settings_container and self.floating_settings_panel:
+                    self.floating_settings_container.move(
+                        self.floating_settings_panel, x, y
+                    )
+
+            def handle_close() -> None:
+                self._close_floating_settings_panel()
+
+            self.floating_settings_panel = FloatingPanel(
+                title=f"{widget.WIDGET_NAME} {_('Settings')}",
+                on_close=handle_close,
+                bounds_provider=bounds_provider,
+                position_callback=position_callback,
+                min_width=getattr(widget, "SETTINGS_PANEL_MIN_WIDTH", 260),
+                min_height=getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300),
+                max_height=getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600),
+            )
+            self.floating_settings_container.put(self.floating_settings_panel, 0, 0)
+            self.floating_settings_panel.set_can_target(True)
+
+        self.active_settings_widget = widget
+        self.active_settings_panel = self.floating_settings_panel
+        self.active_settings_popover = None
+
+        panel_body = self._build_settings_panel_body(widget, in_floating_panel=True)
+        self.floating_settings_panel.set_title(
+            f"{widget.WIDGET_NAME} {_('Settings')}"
+        )
+        self.floating_settings_panel.set_body(panel_body)
+        self.floating_settings_panel.set_visible(True)
+        self.floating_settings_panel.ensure_centered()
+
+    def _build_settings_panel_body(
+        self, widget, in_floating_panel: bool = False
+    ) -> Gtk.Widget:
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        config_manager = widget.get_config_manager()
+        if not config_manager.configs:
+            label = Gtk.Label(label=_("This widget has no settings."))
+            main_box.append(label)
+            return main_box
+        try:
+            config_panel = widget.create_settings_panel()
+        except Exception as exc:
+            logger.error("Failed to build settings panel: %s", exc)
+            config_panel = Gtk.Label(
+                label=_("Unable to load settings. Please reopen the panel.")
+            )
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_min_content_height(
+            getattr(widget, "SETTINGS_PANEL_MIN_HEIGHT", 300)
+        )
+        scroller.set_max_content_height(
+            getattr(widget, "SETTINGS_PANEL_MAX_HEIGHT", 600)
+        )
+        scroller.set_child(config_panel)
+        main_box.append(scroller)
+
+        confirm_button = Gtk.Button(label=_("OK"), halign=Gtk.Align.END)
+        confirm_button.add_css_class("suggested-action")
+
+        def on_confirm_clicked(_btn):
+            config_manager.emit("confirmed")
+            if in_floating_panel:
+                self._close_floating_settings_panel()
+
+        confirm_button.connect("clicked", on_confirm_clicked)
+        main_box.append(confirm_button)
+        return main_box
+
+    def _close_floating_settings_panel(self) -> None:
+        if self.floating_settings_container is None or self.floating_settings_panel is None:
+            return
+        config_manager = None
+        if self.active_settings_widget is not None:
+            config_manager = self.active_settings_widget.get_config_manager()
+        if config_manager is not None:
+            config_manager.clear_ui_references()
+        self.floating_settings_container.remove(self.floating_settings_panel)
+        self.floating_settings_panel = None
+        self.active_settings_panel = None
+        self.active_settings_widget = None
+
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
         action = data.get("action")
@@ -862,9 +987,9 @@ class TransparentWindow(Adw.Window):
     def _set_settings_panel_visible(self, visible: bool, widget: object | None) -> None:
         if widget is None or self.active_settings_widget is not widget:
             return
-        if self.active_settings_panel is not None:
-            self.active_settings_panel.set_visible(visible)
         if self.active_settings_popover is not None:
+            if self.active_settings_panel is not None:
+                self.active_settings_panel.set_visible(visible)
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
 
@@ -931,6 +1056,10 @@ class TransparentWindow(Adw.Window):
             try:
                 # 1. Connect to ADB device first
                 if not await self.adb_helper.connect():
+                    logger.warning(
+                        "ADB connection failed; continuing without device. Settings UI remains available."
+                    )
+                    self._apply_resolution_fallback()
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
                     continue
 
@@ -938,6 +1067,8 @@ class TransparentWindow(Adw.Window):
                 screen_resolution = await self.adb_helper.get_screen_resolution()
                 if screen_resolution:
                     ScreenInfo().set_resolution(screen_resolution[0], screen_resolution[1])
+                else:
+                    self._apply_resolution_fallback()
 
                 # 3. Push server to device
                 if not await self.adb_helper.push_scrcpy_server():
@@ -963,6 +1094,55 @@ class TransparentWindow(Adw.Window):
                 return  # Use return to exit immediately on cancellation
             except Exception as e:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
+        logger.warning(
+            "ADB setup failed after retries; continuing without device connectivity."
+        )
+
+    def _apply_resolution_fallback(self) -> None:
+        screen_info = ScreenInfo()
+        device_width, device_height = screen_info.get_resolution()
+        if device_width > 0 and device_height > 0:
+            logger.warning(
+                "Device resolution unavailable; keeping last known resolution %sx%s.",
+                device_width,
+                device_height,
+            )
+            GLib.idle_add(
+                self._show_adb_error_banner,
+                _("Device resolution unavailable; using last known resolution."),
+            )
+            return
+
+        host_width, host_height = screen_info.get_host_resolution()
+        if host_width == 0 or host_height == 0:
+            host_width = self.get_allocated_width()
+            host_height = self.get_allocated_height()
+
+        if host_width > 0 and host_height > 0:
+            screen_info.set_resolution(host_width, host_height)
+            logger.warning(
+                "Device resolution unavailable; falling back to host size %sx%s.",
+                host_width,
+                host_height,
+            )
+            GLib.idle_add(
+                self._show_adb_error_banner,
+                _("Device resolution unavailable; using host window size."),
+            )
+        else:
+            logger.warning(
+                "Device resolution unavailable and host size unknown; settings may be inaccurate."
+            )
+            GLib.idle_add(
+                self._show_adb_error_banner,
+                _("Device resolution unavailable; using default sizing."),
+            )
+
+    def _show_adb_error_banner(self, message: str) -> None:
+        self.adb_error_label.set_label(message)
+        if not self._adb_error_visible:
+            self.adb_error_box.set_visible(True)
+            self._adb_error_visible = True
 
 
     def setup_mode_system(self):
@@ -1684,6 +1864,7 @@ class TransparentWindow(Adw.Window):
         if new_mode == self.MAPPING_MODE:
             # Enter mapping mode: cancel all selections, disable edit functions
             self.clear_all_selections()
+            self._close_floating_settings_panel()
 
             self.show_notification(_("Mapping Mode (F1: Switch Mode)"))
 
