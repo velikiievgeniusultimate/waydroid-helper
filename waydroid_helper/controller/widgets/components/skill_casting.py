@@ -133,6 +133,12 @@ class SkillCasting(BaseWidget):
     APPLY_DIAGONALS_CONFIG_KEY = "skill_apply_diagonals"
     RESET_DIAGONALS_CONFIG_KEY = "skill_reset_diagonals"
     SHOW_DEBUG_BOUNDARY_CONFIG_KEY = "skill_show_debug_boundary"
+    ANGLE_WARP_ENABLED_CONFIG_KEY = "skill_angle_warp_enabled"
+    ANGLE_WARP_BOUNDS_CONFIG_KEY = "skill_angle_warp_real_bounds_deg"
+    ANGLE_WARP_BOUND_45_CONFIG_KEY = "skill_angle_warp_bound_45"
+    ANGLE_WARP_BOUND_135_CONFIG_KEY = "skill_angle_warp_bound_135"
+    ANGLE_WARP_BOUND_225_CONFIG_KEY = "skill_angle_warp_bound_225"
+    ANGLE_WARP_BOUND_315_CONFIG_KEY = "skill_angle_warp_bound_315"
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
@@ -147,6 +153,10 @@ class SkillCasting(BaseWidget):
         "dl": (-1, 1),
         "ul": (-1, -1),
     }
+    ANGLE_WARP_DEFAULT_BOUNDS = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+    ANGLE_WARP_EPSILON_DEG = 5.0
+    ANGLE_WARP_HANDLE_RADIUS = 6
+    ANGLE_WARP_HANDLE_DISTANCE = 90.0
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -249,6 +259,7 @@ class SkillCasting(BaseWidget):
         self._tuning_y_gain: float | None = None
         self._anchor_set_mode: str | None = None
         self._diag_warning_label: Gtk.Label | None = None
+        self._angle_warp_syncing: bool = False
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
@@ -1013,6 +1024,73 @@ class SkillCasting(BaseWidget):
                 "Show the boundary/center debug overlay while editing this widget.",
             ),
         )
+        angle_warp_enabled_config = create_switch_config(
+            key=self.ANGLE_WARP_ENABLED_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Angle warp (fix diagonals)"),
+            value=True,
+            description=pgettext(
+                "Controller Widgets",
+                "Remap real diagonal sectors to ideal angles to fix distorted circles.",
+            ),
+        )
+        angle_warp_bounds_config = create_text_config(
+            key=self.ANGLE_WARP_BOUNDS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Angle Warp Bounds"),
+            value=self.ANGLE_WARP_DEFAULT_BOUNDS,
+            description=pgettext(
+                "Controller Widgets",
+                "Internal list of real boundary angles (degrees).",
+            ),
+            visible=False,
+        )
+        angle_warp_45_config = create_slider_config(
+            key=self.ANGLE_WARP_BOUND_45_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal 45° boundary"),
+            value=45.0,
+            min_value=5.0,
+            max_value=85.0,
+            step=1.0,
+            description=pgettext(
+                "Controller Widgets",
+                "Adjust the 45° diagonal boundary between 0° and 90°.",
+            ),
+        )
+        angle_warp_135_config = create_slider_config(
+            key=self.ANGLE_WARP_BOUND_135_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal 135° boundary"),
+            value=135.0,
+            min_value=95.0,
+            max_value=175.0,
+            step=1.0,
+            description=pgettext(
+                "Controller Widgets",
+                "Adjust the 135° diagonal boundary between 90° and 180°.",
+            ),
+        )
+        angle_warp_225_config = create_slider_config(
+            key=self.ANGLE_WARP_BOUND_225_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal 225° boundary"),
+            value=225.0,
+            min_value=185.0,
+            max_value=265.0,
+            step=1.0,
+            description=pgettext(
+                "Controller Widgets",
+                "Adjust the 225° diagonal boundary between 180° and 270°.",
+            ),
+        )
+        angle_warp_315_config = create_slider_config(
+            key=self.ANGLE_WARP_BOUND_315_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Diagonal 315° boundary"),
+            value=315.0,
+            min_value=275.0,
+            max_value=355.0,
+            step=1.0,
+            description=pgettext(
+                "Controller Widgets",
+                "Adjust the 315° diagonal boundary between 270° and 360°.",
+            ),
+        )
 
         self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
@@ -1066,6 +1144,12 @@ class SkillCasting(BaseWidget):
         self.add_config_item(apply_diagonals_config)
         self.add_config_item(reset_diagonals_config)
         self.add_config_item(show_debug_boundary_config)
+        self.add_config_item(angle_warp_enabled_config)
+        self.add_config_item(angle_warp_bounds_config)
+        self.add_config_item(angle_warp_45_config)
+        self.add_config_item(angle_warp_135_config)
+        self.add_config_item(angle_warp_225_config)
+        self.add_config_item(angle_warp_315_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
@@ -1120,12 +1204,30 @@ class SkillCasting(BaseWidget):
         self.add_config_change_callback(
             self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
         )
+        self.add_config_change_callback(
+            self.ANGLE_WARP_ENABLED_CONFIG_KEY, self._on_angle_warp_enabled_changed
+        )
+        self.add_config_change_callback(
+            self.ANGLE_WARP_BOUND_45_CONFIG_KEY, self._on_angle_warp_bound_changed
+        )
+        self.add_config_change_callback(
+            self.ANGLE_WARP_BOUND_135_CONFIG_KEY, self._on_angle_warp_bound_changed
+        )
+        self.add_config_change_callback(
+            self.ANGLE_WARP_BOUND_225_CONFIG_KEY, self._on_angle_warp_bound_changed
+        )
+        self.add_config_change_callback(
+            self.ANGLE_WARP_BOUND_315_CONFIG_KEY, self._on_angle_warp_bound_changed
+        )
 
         self._sync_center_inputs()
         self._sync_gain_inputs()
         self._sync_anchor_inputs()
         self._ensure_diagonal_defaults()
         self._sync_diagonal_inputs()
+        self._ensure_angle_warp_defaults()
+        self._sync_angle_warp_sliders()
+        self._set_angle_warp_controls_visible(self._is_angle_warp_enabled())
         self._set_gain_controls_visible(self._is_gain_enabled())
         self._set_anchor_controls_visible(not self.mapping_mode)
         self._set_diagonal_controls_visible(
@@ -1138,6 +1240,9 @@ class SkillCasting(BaseWidget):
                 self._sync_gain_inputs(),
                 self._sync_anchor_inputs(),
                 self._sync_diagonal_inputs(),
+                self._ensure_angle_warp_defaults(),
+                self._sync_angle_warp_sliders(),
+                self._set_angle_warp_controls_visible(self._is_angle_warp_enabled()),
                 self._update_circle_if_selected(),
                 self._emit_overlay_event("refresh"),
             ),
@@ -1286,6 +1391,24 @@ class SkillCasting(BaseWidget):
 
         panel.append(
             build_section(
+                pgettext("Controller Widgets", "Angle Warp Calibration"),
+                [
+                    self.ANGLE_WARP_ENABLED_CONFIG_KEY,
+                    self.ANGLE_WARP_BOUND_45_CONFIG_KEY,
+                    self.ANGLE_WARP_BOUND_135_CONFIG_KEY,
+                    self.ANGLE_WARP_BOUND_225_CONFIG_KEY,
+                    self.ANGLE_WARP_BOUND_315_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Adjust diagonal sector boundaries to correct distorted casting angles.",
+                ),
+                expanded=False,
+            )
+        )
+
+        panel.append(
+            build_section(
                 pgettext("Controller Widgets", "Anchor Calibration"),
                 [
                     self.ANCHOR_UP_INPUT_CONFIG_KEY,
@@ -1355,6 +1478,37 @@ class SkillCasting(BaseWidget):
             tune_widget.set_sensitive(self.mapping_mode)
 
         return panel
+
+    def _on_angle_warp_enabled_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._set_angle_warp_controls_visible(bool(value))
+
+    def _on_angle_warp_bound_changed(
+        self, key: str, value: float, restoring: bool
+    ) -> None:
+        if restoring or self._angle_warp_syncing:
+            return
+        bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        index_map = {
+            self.ANGLE_WARP_BOUND_45_CONFIG_KEY: 1,
+            self.ANGLE_WARP_BOUND_135_CONFIG_KEY: 3,
+            self.ANGLE_WARP_BOUND_225_CONFIG_KEY: 5,
+            self.ANGLE_WARP_BOUND_315_CONFIG_KEY: 7,
+        }
+        idx = index_map.get(key)
+        if idx is None:
+            return
+        try:
+            bounds[idx] = float(value)
+        except (TypeError, ValueError):
+            return
+        normalized = self._normalize_angle_warp_bounds(bounds)
+        self._set_angle_warp_bounds(normalized, sync_sliders=True)
 
     def _on_calibrate_center_clicked(
         self, key: str, value: bool, restoring: bool
@@ -1717,6 +1871,16 @@ class SkillCasting(BaseWidget):
         if self._diag_warning_label is not None:
             self._diag_warning_label.set_visible(visible and bool(self._diag_warning_label.get_label()))
 
+    def _set_angle_warp_controls_visible(self, visible: bool) -> None:
+        manager = self.get_config_manager()
+        for key in (
+            self.ANGLE_WARP_BOUND_45_CONFIG_KEY,
+            self.ANGLE_WARP_BOUND_135_CONFIG_KEY,
+            self.ANGLE_WARP_BOUND_225_CONFIG_KEY,
+            self.ANGLE_WARP_BOUND_315_CONFIG_KEY,
+        ):
+            manager.set_visible(key, visible)
+
     def _set_calibration_mode(self, active: bool) -> None:
         if active:
             self.cancel_anchor_set()
@@ -1851,7 +2015,81 @@ class SkillCasting(BaseWidget):
         self.set_config_value(self.ANCHOR_DOWN_CONFIG_KEY, down)
         self.set_config_value(self.ANCHOR_LEFT_CONFIG_KEY, left)
         self.set_config_value(self.ANCHOR_RIGHT_CONFIG_KEY, right)
-        self._ensure_diagonal_defaults()
+
+    def _is_angle_warp_enabled(self) -> bool:
+        raw = self.get_config_value(self.ANGLE_WARP_ENABLED_CONFIG_KEY)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return False
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return bool(raw)
+
+    def _ensure_angle_warp_defaults(self) -> None:
+        raw = self.get_config_value(self.ANGLE_WARP_BOUNDS_CONFIG_KEY)
+        if not isinstance(raw, list) or len(raw) != len(self.ANGLE_WARP_DEFAULT_BOUNDS):
+            self.set_config_value(
+                self.ANGLE_WARP_BOUNDS_CONFIG_KEY,
+                self.ANGLE_WARP_DEFAULT_BOUNDS.copy(),
+            )
+            return
+        normalized = self._normalize_angle_warp_bounds(raw)
+        if normalized != raw:
+            self.set_config_value(self.ANGLE_WARP_BOUNDS_CONFIG_KEY, normalized)
+
+    def _get_angle_warp_real_bounds(self) -> list[float] | None:
+        raw = self.get_config_value(self.ANGLE_WARP_BOUNDS_CONFIG_KEY)
+        if not isinstance(raw, list) or len(raw) != len(self.ANGLE_WARP_DEFAULT_BOUNDS):
+            return None
+        bounds: list[float] = []
+        for idx, default in enumerate(self.ANGLE_WARP_DEFAULT_BOUNDS):
+            try:
+                value = float(raw[idx])
+            except (TypeError, ValueError, IndexError):
+                value = default
+            if not math.isfinite(value):
+                value = default
+            bounds.append(value)
+        return self._normalize_angle_warp_bounds(bounds)
+
+    def _normalize_angle_warp_bounds(self, bounds: list[float]) -> list[float]:
+        if len(bounds) != len(self.ANGLE_WARP_DEFAULT_BOUNDS):
+            return self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        normalized = bounds[:]
+        normalized[0] = 0.0
+        normalized[2] = 90.0
+        normalized[4] = 180.0
+        normalized[6] = 270.0
+        eps = self.ANGLE_WARP_EPSILON_DEG
+        normalized[1] = min(max(normalized[1], normalized[0] + eps), normalized[2] - eps)
+        normalized[3] = min(max(normalized[3], normalized[2] + eps), normalized[4] - eps)
+        normalized[5] = min(max(normalized[5], normalized[4] + eps), normalized[6] - eps)
+        normalized[7] = min(max(normalized[7], normalized[6] + eps), 360.0 - eps)
+        return normalized
+
+    def _set_angle_warp_bounds(self, bounds: list[float], sync_sliders: bool = False) -> None:
+        self._angle_warp_syncing = True
+        try:
+            self.set_config_value(self.ANGLE_WARP_BOUNDS_CONFIG_KEY, bounds)
+            if sync_sliders:
+                self._sync_angle_warp_sliders(bounds)
+        finally:
+            self._angle_warp_syncing = False
+
+    def _sync_angle_warp_sliders(self, bounds: list[float] | None = None) -> None:
+        if bounds is None:
+            bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS
+        self._angle_warp_syncing = True
+        try:
+            self.set_config_value(self.ANGLE_WARP_BOUND_45_CONFIG_KEY, bounds[1])
+            self.set_config_value(self.ANGLE_WARP_BOUND_135_CONFIG_KEY, bounds[3])
+            self.set_config_value(self.ANGLE_WARP_BOUND_225_CONFIG_KEY, bounds[5])
+            self.set_config_value(self.ANGLE_WARP_BOUND_315_CONFIG_KEY, bounds[7])
+        finally:
+            self._angle_warp_syncing = False
 
     def _reset_anchor_distances(self) -> None:
         self.set_config_value(self.ANCHOR_UP_CONFIG_KEY, "")
@@ -2185,7 +2423,13 @@ class SkillCasting(BaseWidget):
         self._emit_overlay_event("refresh")
 
     def _get_anchor_normalized_vector(
-        self, center_x: float, center_y: float, cursor_x: float, cursor_y: float
+        self,
+        center_x: float,
+        center_y: float,
+        cursor_x: float,
+        cursor_y: float,
+        angle_deg_override: float | None = None,
+        length_override: float | None = None,
     ) -> tuple[float, float] | None:
         distances = self._get_anchor_distances()
         if distances is None:
@@ -2193,10 +2437,19 @@ class SkillCasting(BaseWidget):
         dx = cursor_x - center_x
         dy = cursor_y - center_y
         length = math.hypot(dx, dy)
+        if length_override is not None:
+            length = length_override
         if length == 0:
             return (0.0, 0.0)
-        unit_x = dx / length
-        unit_y = dy / length
+        if angle_deg_override is None:
+            unit_x = dx / length
+            unit_y = dy / length
+        else:
+            theta_rad = math.radians(angle_deg_override)
+            unit_x = math.cos(theta_rad)
+            unit_y = math.sin(theta_rad)
+            dx = unit_x * length
+            dy = unit_y * length
 
         diagonal_offsets = self._get_diagonal_offsets(allow_default_init=True)
         contour = None
@@ -2372,12 +2625,208 @@ class SkillCasting(BaseWidget):
             "diagonals": diagonal_points,
         }
 
+    def get_angle_warp_overlay_data(
+        self, cursor_position: tuple[int, int] | None = None
+    ) -> dict[str, object] | None:
+        center = self._get_window_center()
+        bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        bounds_with_wrap = bounds + [360.0]
+        contour = None
+        anchor_data = self.get_anchor_overlay_data()
+        if anchor_data is not None:
+            contour = anchor_data.get("contour")
+        outer_radius = self.get_config_value("circle_radius")
+        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
+            outer_radius = 200
+
+        line_points = []
+        for idx, angle_deg in enumerate(bounds):
+            theta = math.radians(angle_deg)
+            direction = (math.cos(theta), math.sin(theta))
+            length = None
+            if contour:
+                length = self._ray_intersection_distance(center, direction, contour)
+            if length is None:
+                length = outer_radius
+            line_points.append(
+                {
+                    "angle_deg": angle_deg,
+                    "start": center,
+                    "end": (
+                        center[0] + direction[0] * length,
+                        center[1] + direction[1] * length,
+                    ),
+                    "is_axis": idx % 2 == 0,
+                }
+            )
+
+        if cursor_position is None:
+            rel_x = self._mouse_x - center[0]
+            rel_y = self._mouse_y - center[1]
+        else:
+            rel_x = cursor_position[0] - center[0]
+            rel_y = cursor_position[1] - center[1]
+        x_gain, y_gain = self._get_gains()
+        rel_x *= x_gain
+        rel_y *= y_gain
+        theta_real = self._vector_to_angle(rel_x, rel_y)
+        sector_idx = 0
+        if self._is_angle_warp_enabled():
+            theta_ideal, sector_idx, _t = self._warp_angle_with_details(
+                theta_real, bounds, sectors=len(bounds), epsilon=self.ANGLE_WARP_EPSILON_DEG
+            )
+            if sector_idx is None:
+                sector_idx = 0
+        else:
+            theta_ideal = theta_real
+            for idx in range(len(bounds)):
+                start = bounds_with_wrap[idx]
+                end = bounds_with_wrap[idx + 1]
+                theta_local = theta_real
+                if theta_local < start:
+                    theta_local += 360.0
+                if start <= theta_local < end:
+                    sector_idx = idx
+                    break
+        active_sector = {
+            "start": bounds_with_wrap[sector_idx],
+            "end": bounds_with_wrap[sector_idx + 1],
+        }
+
+        return {
+            "center": center,
+            "bounds": bounds,
+            "lines": line_points,
+            "active_sector": active_sector,
+            "theta_real": theta_real,
+            "theta_ideal": theta_ideal,
+            "sector_idx": sector_idx,
+        }
+
+    def get_angle_warp_handle_positions(self) -> dict[str, tuple[float, float]] | None:
+        center = self._get_window_center()
+        bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        radius = self._get_angle_warp_handle_distance()
+        return {
+            "diag_45": (
+                center[0] + math.cos(math.radians(bounds[1])) * radius,
+                center[1] + math.sin(math.radians(bounds[1])) * radius,
+            ),
+            "diag_135": (
+                center[0] + math.cos(math.radians(bounds[3])) * radius,
+                center[1] + math.sin(math.radians(bounds[3])) * radius,
+            ),
+            "diag_225": (
+                center[0] + math.cos(math.radians(bounds[5])) * radius,
+                center[1] + math.sin(math.radians(bounds[5])) * radius,
+            ),
+            "diag_315": (
+                center[0] + math.cos(math.radians(bounds[7])) * radius,
+                center[1] + math.sin(math.radians(bounds[7])) * radius,
+            ),
+        }
+
+    def get_angle_warp_handle_radius(self) -> int:
+        return self.ANGLE_WARP_HANDLE_RADIUS
+
+    def get_angle_warp_bound_angle(self, key: str) -> float | None:
+        bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        index_map = {
+            "diag_45": 1,
+            "diag_135": 3,
+            "diag_225": 5,
+            "diag_315": 7,
+        }
+        idx = index_map.get(key)
+        if idx is None:
+            return None
+        return bounds[idx]
+
+    def update_angle_warp_bound(self, key: str, angle_deg: float) -> bool:
+        bounds = self._get_angle_warp_real_bounds()
+        if bounds is None:
+            bounds = self.ANGLE_WARP_DEFAULT_BOUNDS.copy()
+        index_map = {
+            "diag_45": 1,
+            "diag_135": 3,
+            "diag_225": 5,
+            "diag_315": 7,
+        }
+        idx = index_map.get(key)
+        if idx is None:
+            return False
+        angle = angle_deg % 360.0
+        eps = self.ANGLE_WARP_EPSILON_DEG
+        limits = {
+            1: (0.0 + eps, 90.0 - eps),
+            3: (90.0 + eps, 180.0 - eps),
+            5: (180.0 + eps, 270.0 - eps),
+            7: (270.0 + eps, 360.0 - eps),
+        }
+        low, high = limits[idx]
+        angle = min(max(angle, low), high)
+        bounds[idx] = angle
+        normalized = self._normalize_angle_warp_bounds(bounds)
+        self._set_angle_warp_bounds(normalized, sync_sliders=True)
+        self._emit_overlay_event("refresh")
+        return True
+
+    def _get_angle_warp_handle_distance(self) -> float:
+        outer_radius = self.get_config_value("circle_radius")
+        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
+            outer_radius = 200
+        return min(self.ANGLE_WARP_HANDLE_DISTANCE, outer_radius * 0.9)
+
     @staticmethod
     def _vector_to_angle(dx: float, dy: float) -> float:
         angle = math.degrees(math.atan2(dy, dx))
         if angle < 0:
             angle += 360
         return angle
+
+    @staticmethod
+    def warp_angle_deg(
+        theta_real_deg: float, real_bounds_deg: list[float], sectors: int = 8, epsilon: float = 1.0
+    ) -> float:
+        theta_ideal, _sector_idx, _t = SkillCasting._warp_angle_with_details(
+            theta_real_deg, real_bounds_deg, sectors=sectors, epsilon=epsilon
+        )
+        return theta_ideal
+
+    @staticmethod
+    def _warp_angle_with_details(
+        theta_real_deg: float, real_bounds_deg: list[float], sectors: int = 8, epsilon: float = 1.0
+    ) -> tuple[float, int | None, float | None]:
+        if sectors <= 0:
+            return theta_real_deg % 360.0, None, None
+        if len(real_bounds_deg) != sectors:
+            return theta_real_deg % 360.0, None, None
+        theta = theta_real_deg % 360.0
+        bounds = [b % 360.0 for b in real_bounds_deg]
+        bounds_with_wrap = bounds + [360.0]
+        ideal_bounds = [i * 360.0 / sectors for i in range(sectors + 1)]
+        for idx in range(sectors):
+            start = bounds_with_wrap[idx]
+            end = bounds_with_wrap[idx + 1]
+            if end <= start:
+                end = start + max(epsilon, 1.0)
+            theta_local = theta
+            if theta_local < start:
+                theta_local += 360.0
+            if start <= theta_local < end:
+                width = max(end - start, epsilon)
+                t = (theta_local - start) / width
+                t = min(max(t, 0.0), 1.0)
+                ideal_start = ideal_bounds[idx]
+                ideal_end = ideal_bounds[idx + 1]
+                return (ideal_start + t * (ideal_end - ideal_start)) % 360.0, idx, t
+        return theta, None, None
 
     def get_tuning_overlay_data(
         self, cursor_position: tuple[int, int] | None
@@ -2744,16 +3193,6 @@ class SkillCasting(BaseWidget):
         widget_center_y = self.center_y
         widget_radius = self.width / 2
 
-        anchor_vector = self._get_anchor_normalized_vector(
-            window_center_x, window_center_y, mouse_x, mouse_y
-        )
-        if anchor_vector is not None:
-            nx, ny = anchor_vector
-            return (
-                widget_center_x + nx * widget_radius,
-                widget_center_y + ny * widget_radius,
-            )
-
         outer_radius = self.get_config_value("circle_radius")
         if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
             outer_radius = 200
@@ -2769,6 +3208,42 @@ class SkillCasting(BaseWidget):
 
         if distance == 0:
             return (widget_center_x, widget_center_y)
+
+        theta_real = self._vector_to_angle(rel_x, rel_y)
+        theta_ideal = theta_real
+        sector_idx = None
+        if self._is_angle_warp_enabled():
+            bounds = self._get_angle_warp_real_bounds()
+            if bounds is not None:
+                theta_ideal, sector_idx, _t = self._warp_angle_with_details(
+                    theta_real, bounds, sectors=len(bounds), epsilon=self.ANGLE_WARP_EPSILON_DEG
+                )
+        if sector_idx is not None:
+            logger.debug(
+                "SkillCasting angle warp: real=%.2f ideal=%.2f sector=%d",
+                theta_real,
+                theta_ideal,
+                sector_idx,
+            )
+
+        anchor_vector = self._get_anchor_normalized_vector(
+            window_center_x,
+            window_center_y,
+            mouse_x,
+            mouse_y,
+            angle_deg_override=theta_ideal,
+            length_override=distance,
+        )
+        if anchor_vector is not None:
+            nx, ny = anchor_vector
+            return (
+                widget_center_x + nx * widget_radius,
+                widget_center_y + ny * widget_radius,
+            )
+
+        theta_rad = math.radians(theta_ideal)
+        rel_x = math.cos(theta_rad) * distance
+        rel_y = math.sin(theta_rad) * distance
 
         ratio = min(distance / outer_radius, 1.0)
         target_x = widget_center_x + (rel_x / distance) * ratio * widget_radius
