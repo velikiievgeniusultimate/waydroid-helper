@@ -101,7 +101,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.mapping_mode: bool = False
         self.drag_widget: object | None = None
         self.drag_point: str | None = None
-        self.drag_start_offset: tuple[int, int] | None = None
+        self.drag_start_offset: tuple[int, int] | float | None = None
+        self.drag_kind: str | None = None
         self.set_draw_func(self._draw_overlay, None)
         self.set_can_target(False)
         self.set_visible(False)
@@ -122,6 +123,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.drag_widget = None
             self.drag_point = None
             self.drag_start_offset = None
+            self.drag_kind = None
         if not self.widgets:
             self.set_visible(False)
         self.queue_draw()
@@ -164,6 +166,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.drag_widget = None
             self.drag_point = None
             self.drag_start_offset = None
+            self.drag_kind = None
             self.set_visible(bool(self.widgets))
         else:
             self.set_visible(bool(self.widgets))
@@ -179,16 +182,36 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             return False
         if self.drag_widget is not None:
             return True
-        target = self._find_diagonal_handle(x, y)
+        target_angle = self._find_angle_warp_handle(x, y)
+        target_diag = self._find_diagonal_handle(x, y)
+        target = None
+        if target_angle and target_diag:
+            target = target_angle if target_angle[2] <= target_diag[2] else target_diag
+        else:
+            target = target_angle or target_diag
         if target is None:
             return False
-        widget, key_name = target
+        widget, key_name, _distance_sq = target
+        if target is target_angle:
+            get_angle = getattr(widget, "get_angle_warp_bound_angle", None)
+            if not callable(get_angle):
+                return False
+            start_angle = get_angle(key_name)
+            if start_angle is None:
+                return False
+            self.drag_widget = widget
+            self.drag_point = key_name
+            self.drag_kind = "angle_warp"
+            self.drag_start_offset = start_angle
+            self.queue_draw()
+            return True
         get_offset = getattr(widget, "get_diagonal_offset", None)
         offset = get_offset(key_name) if callable(get_offset) else None
         if offset is None:
             return False
         self.drag_widget = widget
         self.drag_point = key_name
+        self.drag_kind = "diagonal"
         self.drag_start_offset = offset
         self.queue_draw()
         return True
@@ -197,15 +220,28 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         if self.mapping_mode or self.drag_widget is None or self.drag_point is None:
             return False
         get_center = getattr(self.drag_widget, "get_effective_center", None)
-        update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
-        if not callable(get_center) or not callable(update_offset):
+        if not callable(get_center):
             return False
         center = get_center()
         if center is None:
             return False
         dx = x - center[0]
         dy = y - center[1]
-        updated = update_offset(self.drag_point, dx, dy)
+        if self.drag_kind == "angle_warp":
+            update_bound = getattr(self.drag_widget, "update_angle_warp_bound", None)
+            if not callable(update_bound):
+                return False
+            if dx == 0 and dy == 0:
+                return False
+            angle = math.degrees(math.atan2(dy, dx))
+            if angle < 0:
+                angle += 360
+            updated = update_bound(self.drag_point, angle)
+        else:
+            update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
+            if not callable(update_offset):
+                return False
+            updated = update_offset(self.drag_point, dx, dy)
         if updated:
             self.queue_draw()
         return updated
@@ -218,6 +254,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.drag_widget = None
         self.drag_point = None
         self.drag_start_offset = None
+        self.drag_kind = None
         self.queue_draw()
         return True
 
@@ -225,19 +262,30 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         if keyval != Gdk.KEY_Escape or self.drag_widget is None:
             return False
         if self.drag_widget is not None and self.drag_point is not None and self.drag_start_offset is not None:
-            update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
-            if callable(update_offset):
-                update_offset(self.drag_point, *self.drag_start_offset)
+            if self.drag_kind == "angle_warp":
+                update_bound = getattr(self.drag_widget, "update_angle_warp_bound", None)
+                if callable(update_bound):
+                    update_bound(self.drag_point, float(self.drag_start_offset))
+            else:
+                update_offset = getattr(self.drag_widget, "update_diagonal_offset", None)
+                if callable(update_offset):
+                    update_offset(self.drag_point, *self.drag_start_offset)
         self.drag_widget = None
         self.drag_point = None
         self.drag_start_offset = None
+        self.drag_kind = None
         self.queue_draw()
         return True
 
-    def _find_diagonal_handle(self, x: float, y: float) -> tuple[object, str] | None:
+    def _find_diagonal_handle(self, x: float, y: float) -> tuple[object, str, float] | None:
         closest = None
         min_distance_sq = None
         for widget in self.widgets:
+            if hasattr(widget, "is_selected") and not getattr(widget, "is_selected"):
+                continue
+            get_debug = getattr(widget, "is_debug_boundary_enabled", None)
+            if callable(get_debug) and not get_debug():
+                continue
             get_handles = getattr(widget, "get_diagonal_handle_positions", None)
             get_radius = getattr(widget, "get_diagonal_handle_radius", None)
             if not callable(get_handles):
@@ -255,7 +303,36 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                     min_distance_sq is None or distance_sq < min_distance_sq
                 ):
                     min_distance_sq = distance_sq
-                    closest = (widget, key_name)
+                    closest = (widget, key_name, distance_sq)
+        return closest
+
+    def _find_angle_warp_handle(self, x: float, y: float) -> tuple[object, str, float] | None:
+        closest = None
+        min_distance_sq = None
+        for widget in self.widgets:
+            if hasattr(widget, "is_selected") and not getattr(widget, "is_selected"):
+                continue
+            get_debug = getattr(widget, "is_debug_boundary_enabled", None)
+            if callable(get_debug) and not get_debug():
+                continue
+            get_handles = getattr(widget, "get_angle_warp_handle_positions", None)
+            get_radius = getattr(widget, "get_angle_warp_handle_radius", None)
+            if not callable(get_handles):
+                continue
+            handles = get_handles()
+            if not handles:
+                continue
+            radius = get_radius() if callable(get_radius) else 8
+            radius_sq = radius * radius
+            for key_name, (hx, hy) in handles.items():
+                dx = x - hx
+                dy = y - hy
+                distance_sq = dx * dx + dy * dy
+                if distance_sq <= radius_sq and (
+                    min_distance_sq is None or distance_sq < min_distance_sq
+                ):
+                    min_distance_sq = distance_sq
+                    closest = (widget, key_name, distance_sq)
         return closest
 
     def handle_tuning_key(self, keyval: int, state: Gdk.ModifierType) -> bool:
@@ -318,6 +395,76 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                 cr.arc(point[0], point[1], radius, 0, 2 * math.pi)
                 cr.fill()
 
+    def _draw_angle_warp_overlay(self, cr, widget: object, data: dict[str, object]) -> None:
+        center = data.get("center")
+        lines = data.get("lines") or []
+        active_sector = data.get("active_sector") or {}
+        if not center:
+            return
+        for line in lines:
+            end = line.get("end")
+            if not end:
+                continue
+            if line.get("is_axis"):
+                cr.set_source_rgba(0.9, 0.7, 0.2, 0.9)
+                cr.set_line_width(3.0)
+            else:
+                cr.set_source_rgba(0.2, 0.7, 1.0, 0.8)
+                cr.set_line_width(2.0)
+            cr.move_to(center[0], center[1])
+            cr.line_to(end[0], end[1])
+            cr.stroke()
+
+        sector_start = active_sector.get("start")
+        sector_end = active_sector.get("end")
+        if sector_start is not None and sector_end is not None:
+            radius = 40
+            cr.set_source_rgba(0.2, 0.8, 0.5, 0.2)
+            cr.set_line_width(8.0)
+            cr.arc(
+                center[0],
+                center[1],
+                radius,
+                math.radians(sector_start),
+                math.radians(sector_end),
+            )
+            cr.stroke()
+
+        get_handles = getattr(widget, "get_angle_warp_handle_positions", None)
+        get_radius = getattr(widget, "get_angle_warp_handle_radius", None)
+        if not callable(get_handles):
+            return
+        handles = get_handles()
+        if not handles:
+            return
+        handle_radius = get_radius() if callable(get_radius) else 6
+        for key_name, point in handles.items():
+            radius = handle_radius
+            if self.drag_widget is widget and self.drag_point == key_name and self.drag_kind == "angle_warp":
+                radius = handle_radius + 2
+            cr.set_source_rgba(0.1, 0.6, 1.0, 0.95)
+            cr.arc(point[0], point[1], radius, 0, 2 * math.pi)
+            cr.fill()
+
+    def _draw_angle_warp_debug(self, cr, data: dict[str, object]) -> None:
+        theta_real = data.get("theta_real")
+        theta_ideal = data.get("theta_ideal")
+        sector_idx = data.get("sector_idx")
+        if theta_real is None or theta_ideal is None:
+            return
+        sector_text = "--"
+        if sector_idx is not None:
+            sector_text = str(sector_idx)
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.select_font_face("Sans", FontSlant.NORMAL, FontWeight.NORMAL)
+        cr.set_font_size(14)
+        margin = 16
+        line_height = 18
+        cr.move_to(margin, margin + line_height * 4)
+        cr.show_text(f"Warp real: {theta_real:.1f}°  ideal: {theta_ideal:.1f}°")
+        cr.move_to(margin, margin + line_height * 5)
+        cr.show_text(f"Active sector: {sector_text}")
+
     def _draw_overlay(self, widget, cr, width, height, user_data):
         if not self.widgets:
             return
@@ -339,6 +486,13 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                     anchor_data = get_anchor_overlay()
                     if anchor_data is not None:
                         self._draw_anchor_shape(cr, center_widget, anchor_data)
+                if getattr(center_widget, "is_selected", False):
+                    get_angle_overlay = getattr(center_widget, "get_angle_warp_overlay_data", None)
+                    if callable(get_angle_overlay):
+                        angle_data = get_angle_overlay(self.cursor_position)
+                        if angle_data is not None:
+                            self._draw_angle_warp_overlay(cr, center_widget, angle_data)
+                            self._draw_angle_warp_debug(cr, angle_data)
             return
 
         is_calibrating = False
@@ -1141,6 +1295,7 @@ class TransparentWindow(Adw.Window):
             return
 
         # In edit mode, delegate to workspace_manager
+        self.right_click_overlay.update_cursor((int(x), int(y)))
         if self.right_click_overlay.handle_edit_mouse_motion(x, y):
             return
         self.workspace_manager.handle_mouse_motion(controller, x, y)
