@@ -30,18 +30,6 @@ CSS_TRANSPARENT = """
     font-weight: bold;
 }
 
-#adb-error-box {
-    background-color: rgba(150, 0, 0, 0.85);
-    border-radius: 8px;
-    padding: 8px 16px;
-}
-
-#adb-error-label {
-    color: white;
-    font-size: 14px;
-    font-weight: bold;
-}
-
 .calibration-mask {
     background-color: rgba(0, 0, 0, 0.55);
 }
