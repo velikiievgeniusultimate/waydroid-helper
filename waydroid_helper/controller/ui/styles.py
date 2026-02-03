@@ -30,6 +30,36 @@ CSS_TRANSPARENT = """
     font-weight: bold;
 }
 
+#adb-error-box {
+    background-color: rgba(150, 0, 0, 0.85);
+    border-radius: 8px;
+    padding: 8px 16px;
+}
+
+#adb-error-label {
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+#settings-error-box {
+    background-color: rgba(150, 80, 0, 0.85);
+    border-radius: 8px;
+    padding: 6px 14px;
+}
+
+#settings-error-label {
+    color: white;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.floating-panel {
+    background-color: rgba(25, 25, 25, 0.95);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 .calibration-mask {
     background-color: rgba(0, 0, 0, 0.55);
 }
