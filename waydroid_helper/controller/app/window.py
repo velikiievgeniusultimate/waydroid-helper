@@ -95,14 +95,21 @@ class CircleOverlay(Gtk.DrawingArea):
 
         # Calibrated ellipse boundary (corrected center + vertical scale)
         if vertical_scale_ratio != 0:
-            cr.save()
-            cr.translate(center_x, corrected_center_y)
-            cr.scale(1.0, vertical_scale_ratio)
+            samples = 128
             cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
             cr.set_line_width(2)
-            cr.arc(0, 0, circle_radius, 0, 2 * math.pi)
+            for idx in range(samples + 1):
+                t = 2 * math.pi * idx / samples
+                unit_x = math.cos(t)
+                unit_y = math.sin(t)
+                x = center_x + unit_x * circle_radius
+                y = corrected_center_y + unit_y * circle_radius * vertical_scale_ratio
+                if idx == 0:
+                    cr.move_to(x, y)
+                else:
+                    cr.line_to(x, y)
+            cr.close_path()
             cr.stroke()
-            cr.restore()
 
         # Anchor crosshair at visual center
         crosshair_size = 8
