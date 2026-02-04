@@ -90,10 +90,10 @@ class CircleOverlay(Gtk.DrawingArea):
             return
 
         vertical_scale_ratio = self.circle_data.get("vertical_scale_ratio", 1.0)
-        dy_bias = self.circle_data.get("dy_bias", 0.0)
-        corrected_center_y = center_y + dy_bias
+        y_offset = self.circle_data.get("y_offset", 0.0)
+        math_center_y = center_y + y_offset
 
-        # Calibrated ellipse boundary (corrected center + vertical scale)
+        # Ellipse boundary (math center + vertical scale)
         if vertical_scale_ratio != 0:
             samples = 128
             cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
@@ -103,7 +103,7 @@ class CircleOverlay(Gtk.DrawingArea):
                 unit_x = math.cos(t)
                 unit_y = math.sin(t)
                 x = center_x + unit_x * circle_radius
-                y = corrected_center_y + unit_y * circle_radius * vertical_scale_ratio
+                y = math_center_y + unit_y * circle_radius * vertical_scale_ratio
                 if idx == 0:
                     cr.move_to(x, y)
                 else:
