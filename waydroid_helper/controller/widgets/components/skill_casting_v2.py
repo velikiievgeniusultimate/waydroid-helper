@@ -16,11 +16,11 @@ class SkillCastingCalibration:
     center_y: float
     radius: float
     vertical_scale_ratio: float = 0.745
-    dy_bias: float = 78.0
+    y_offset: float = 0.0
 
     @property
-    def corrected_center_y(self) -> float:
-        return self.center_y + self.dy_bias
+    def math_center_y(self) -> float:
+        return self.center_y + self.y_offset
 
 
 def map_pointer_to_widget_target(
@@ -35,7 +35,7 @@ def map_pointer_to_widget_target(
         return (widget_center_x, widget_center_y)
 
     dx = mouse_x - calibration.center_x
-    dy = mouse_y - calibration.corrected_center_y
+    dy = mouse_y - calibration.math_center_y
 
     if calibration.vertical_scale_ratio == 0:
         return (widget_center_x, widget_center_y)
@@ -52,9 +52,9 @@ def map_pointer_to_widget_target(
     if r_corr == 0:
         return (widget_center_x, widget_center_y)
 
-    ratio = min(r_corr / calibration.radius, 1.0)
     unit_x = dx / r_corr
     unit_y = dy_corr / r_corr
+    ratio = min(r_corr / calibration.radius, 1.0)
 
     target_x = widget_center_x + unit_x * ratio * widget_radius
     target_y = widget_center_y + unit_y * ratio * widget_radius
@@ -71,7 +71,7 @@ def clamp_visual_point(
         return None
 
     dx = mouse_x - calibration.center_x
-    dy = mouse_y - calibration.corrected_center_y
+    dy = mouse_y - calibration.math_center_y
 
     if calibration.vertical_scale_ratio == 0:
         return None
@@ -87,9 +87,8 @@ def clamp_visual_point(
 
     x_vis = calibration.center_x + dx_scaled
     y_vis = (
-        calibration.center_y
+        calibration.math_center_y
         + (dy_corr_scaled * calibration.vertical_scale_ratio)
-        + calibration.dy_bias
     )
 
     return (x_vis, y_vis)

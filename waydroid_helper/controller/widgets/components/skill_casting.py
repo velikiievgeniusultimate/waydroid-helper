@@ -92,11 +92,11 @@ class SkillCasting(BaseWidget):
     CENTER_Y_CONFIG_KEY = "skill_calibrated_center_y"
     CENTER_X_INPUT_CONFIG_KEY = "skill_center_x_input"
     CENTER_Y_INPUT_CONFIG_KEY = "skill_center_y_input"
+    Y_OFFSET_CONFIG_KEY = "skill_ellipse_y_offset"
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
     VERTICAL_SCALE_RATIO = 0.745
-    DY_BIAS = 78.0
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -546,62 +546,71 @@ class SkillCasting(BaseWidget):
         )
         calibrate_center_config = create_action_config(
             key=self.CALIBRATE_CENTER_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Center Calibration"),
+            label=pgettext("Controller Widgets", "Calibrate Anchor Center"),
             button_label=pgettext("Controller Widgets", "Calibrate"),
             description=pgettext(
                 "Controller Widgets",
-                "Click to enter calibration mode, then click the character position on screen.",
+                "Click to enter calibration mode, then click the anchor center on screen.",
             ),
         )
         reset_center_config = create_action_config(
             key=self.RESET_CENTER_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Reset Center"),
+            label=pgettext("Controller Widgets", "Reset Anchor Center"),
             button_label=pgettext("Controller Widgets", "Reset"),
             description=pgettext(
                 "Controller Widgets",
-                "Clear the calibrated center and return to the screen center.",
+                "Clear the calibrated anchor center and return to the screen center.",
             ),
         )
         center_x_config = create_text_config(
             key=self.CENTER_X_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Center X"),
+            label=pgettext("Controller Widgets", "Anchor Center X"),
             value="",
             description=pgettext(
-                "Controller Widgets", "Stored calibration center X coordinate."
+                "Controller Widgets", "Stored anchor center X coordinate."
             ),
             visible=False,
         )
         center_y_config = create_text_config(
             key=self.CENTER_Y_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Center Y"),
+            label=pgettext("Controller Widgets", "Anchor Center Y"),
             value="",
             description=pgettext(
-                "Controller Widgets", "Stored calibration center Y coordinate."
+                "Controller Widgets", "Stored anchor center Y coordinate."
             ),
             visible=False,
         )
         center_x_input_config = create_text_config(
             key=self.CENTER_X_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Center X (px)"),
+            label=pgettext("Controller Widgets", "Anchor Center X (px)"),
             value="",
             description=pgettext(
-                "Controller Widgets", "Manual center X coordinate in pixels."
+                "Controller Widgets", "Manual anchor center X coordinate in pixels."
             ),
         )
         center_y_input_config = create_text_config(
             key=self.CENTER_Y_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Center Y (px)"),
+            label=pgettext("Controller Widgets", "Anchor Center Y (px)"),
             value="",
             description=pgettext(
-                "Controller Widgets", "Manual center Y coordinate in pixels."
+                "Controller Widgets", "Manual anchor center Y coordinate in pixels."
+            ),
+        )
+        y_offset_config = create_text_config(
+            key=self.Y_OFFSET_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ellipse Y Offset (px)"),
+            value="0",
+            description=pgettext(
+                "Controller Widgets",
+                "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Apply Center"),
+            label=pgettext("Controller Widgets", "Apply Anchor Center"),
             button_label=pgettext("Controller Widgets", "Apply"),
             description=pgettext(
-                "Controller Widgets", "Apply the manual center coordinates."
+                "Controller Widgets", "Apply the manual anchor center coordinates."
             ),
         )
 
@@ -614,6 +623,7 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_y_config)
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
+        self.add_config_item(y_offset_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -629,6 +639,9 @@ class SkillCasting(BaseWidget):
         )
         self.add_config_change_callback(
             self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
+        )
+        self.add_config_change_callback(
+            self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
         )
 
         self._sync_center_inputs()
@@ -655,6 +668,16 @@ class SkillCasting(BaseWidget):
             self._update_circle_if_selected()
         except (ValueError, TypeError):
             pass
+
+    def _on_y_offset_changed(self, key: str, value: str, restoring: bool) -> None:
+        if restoring:
+            return
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return
+        self._update_circle_if_selected()
+        self._emit_overlay_event("refresh")
 
     def _on_cast_timing_changed(self, key: str, value: str, restoring:bool) -> None:
         """处理施法时机配置变更"""
@@ -687,7 +710,7 @@ class SkillCasting(BaseWidget):
         intro = Gtk.Label(
             label=pgettext(
                 "Controller Widgets",
-                "Configure casting behavior and center calibration.",
+                "Configure casting behavior and affine calibration.",
             ),
             xalign=0,
         )
@@ -753,17 +776,18 @@ class SkillCasting(BaseWidget):
 
         panel.append(
             build_section(
-                pgettext("Controller Widgets", "Center Calibration"),
+                pgettext("Controller Widgets", "Anchor Calibration"),
                 [
                     self.CALIBRATE_CENTER_CONFIG_KEY,
                     self.RESET_CENTER_CONFIG_KEY,
                     self.CENTER_X_INPUT_CONFIG_KEY,
                     self.CENTER_Y_INPUT_CONFIG_KEY,
+                    self.Y_OFFSET_CONFIG_KEY,
                     self.APPLY_CENTER_CONFIG_KEY,
                 ],
                 description=pgettext(
                     "Controller Widgets",
-                    "Calibrate by clicking the character position on screen, or enter pixel coordinates manually.",
+                    "Calibrate the anchor center by clicking on screen, or enter pixel coordinates manually.",
                 ),
                 expanded=True,
                 extra_widgets=[status_label],
@@ -907,7 +931,7 @@ class SkillCasting(BaseWidget):
         if not isinstance(button, Gtk.Button):
             return
         label = (
-            pgettext("Controller Widgets", "Cancel calibration")
+            pgettext("Controller Widgets", "Cancel")
             if self._center_calibration_active
             else pgettext("Controller Widgets", "Calibrate")
         )
@@ -920,7 +944,7 @@ class SkillCasting(BaseWidget):
             self._calibration_status_label.set_label(
                 pgettext(
                     "Controller Widgets",
-                    "Click on the screen to set center, or press Esc to cancel.",
+                    "Click on the screen to set the anchor center, or press Esc to cancel.",
                 )
             )
         else:
@@ -1040,7 +1064,7 @@ class SkillCasting(BaseWidget):
                 "circle_radius": calibration.radius,
                 "center": (calibration.center_x, calibration.center_y),
                 "vertical_scale_ratio": calibration.vertical_scale_ratio,
-                "dy_bias": calibration.dy_bias,
+                "y_offset": calibration.y_offset,
                 "action": "show",
             }
         else:
@@ -1303,12 +1327,17 @@ class SkillCasting(BaseWidget):
         outer_radius = self.get_config_value("circle_radius")
         if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
             outer_radius = 200
+        raw_y_offset = self.get_config_value(self.Y_OFFSET_CONFIG_KEY)
+        try:
+            y_offset = float(raw_y_offset)
+        except (TypeError, ValueError):
+            y_offset = 0.0
         return SkillCastingCalibration(
             center_x=center_x,
             center_y=center_y,
             radius=float(outer_radius),
             vertical_scale_ratio=self.VERTICAL_SCALE_RATIO,
-            dy_bias=self.DY_BIAS,
+            y_offset=y_offset,
         )
 
     def _map_circle_to_circle(
