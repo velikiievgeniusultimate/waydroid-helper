@@ -515,9 +515,9 @@ class SkillCasting(BaseWidget):
             key="circle_radius",
             label=pgettext("Controller Widgets", "Casting Radius"),
             value=200,
-            min_value=50,
-            max_value=500,
-            step=10,
+            min_value=1,
+            max_value=10000,
+            step=1,
             description=pgettext(
                 "Controller Widgets",
                 "Fine-tune according to the casting range of different skills",
@@ -928,8 +928,8 @@ class SkillCasting(BaseWidget):
 
     def _build_radius_control(self, config_manager) -> Gtk.Widget:
         config = config_manager.get_config("circle_radius")
-        min_value = 50
-        max_value = 500
+        min_value = 1
+        max_value = 10000
         current_value = 200
         if config is not None:
             min_value = getattr(config, "min_value", min_value)
@@ -951,16 +951,12 @@ class SkillCasting(BaseWidget):
         )
         self._radius_adjustment = adjustment
 
-        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adjustment)
-        scale.set_draw_value(False)
-        scale.set_digits(0)
-        scale.set_hexpand(True)
-
         spin = Gtk.SpinButton()
         spin.set_adjustment(adjustment)
         spin.set_digits(0)
         spin.set_numeric(True)
         spin.set_width_chars(6)
+        spin.set_increments(1, 10)
 
         def on_radius_changed(_adjustment):
             if self._radius_adjustment_updating:
@@ -976,7 +972,6 @@ class SkillCasting(BaseWidget):
 
         adjustment.connect("value-changed", on_radius_changed)
 
-        box.append(scale)
         box.append(spin)
         box.set_visible(True)
         return box
