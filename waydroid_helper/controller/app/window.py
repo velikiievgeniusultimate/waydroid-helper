@@ -93,19 +93,13 @@ class CircleOverlay(Gtk.DrawingArea):
         dy_bias = self.circle_data.get("dy_bias", 0.0)
         corrected_center_y = center_y + dy_bias
 
-        # Visual range circle
-        cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
-        cr.set_line_width(2)
-        cr.arc(center_x, center_y, circle_radius, 0, 2 * math.pi)
-        cr.stroke()
-
-        # Optional corrected-space ellipse guide
-        if vertical_scale_ratio not in (0, 1):
+        # Calibrated ellipse boundary (corrected center + vertical scale)
+        if vertical_scale_ratio != 0:
             cr.save()
             cr.translate(center_x, corrected_center_y)
             cr.scale(1.0, vertical_scale_ratio)
-            cr.set_source_rgba(0.2, 0.7, 1.0, 0.2)
-            cr.set_line_width(1)
+            cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
+            cr.set_line_width(2)
             cr.arc(0, 0, circle_radius, 0, 2 * math.pi)
             cr.stroke()
             cr.restore()
