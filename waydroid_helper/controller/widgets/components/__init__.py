@@ -4,6 +4,7 @@
 
 from .aim import Aim
 from .cancel_casting import CancelCasting
+from .circle_tilt_radius_calibration import CircleTiltRadiusCalibration
 from .directional_pad import DirectionalPad
 from .fire import Fire
 from .macro import Macro
@@ -17,9 +18,10 @@ __all__ = [
     'Fire', 
     'SingleClick',
     'DirectionalPad',
+    'CircleTiltRadiusCalibration',
     'Macro',
     'RightClickToWalk',
     'SkillCasting',
     'CancelCasting',
     'RepeatedClick',
-] 
+]

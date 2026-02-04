@@ -186,6 +186,7 @@ controller_widgets_base_sources = [
 controller_widgets_components_sources = [
     'controller/widgets/components/__init__.py',
     'controller/widgets/components/aim.py',
+    'controller/widgets/components/circle_tilt_radius_calibration.py',
     'controller/widgets/components/directional_pad.py',
     'controller/widgets/components/fire.py',
     'controller/widgets/components/single_click.py',
