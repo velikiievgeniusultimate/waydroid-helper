@@ -72,20 +72,57 @@ class CircleOverlay(Gtk.DrawingArea):
 
         # Get circle parameters
         circle_radius = self.circle_data.get("circle_radius", 200)
+        center = self.circle_data.get("center")
+        widget_type = self.circle_data.get("widget_type")
 
         # Calculate circle parameters
-        window_center_x = width / 2
-        window_center_y = height / 2
+        if isinstance(center, (list, tuple)) and len(center) == 2:
+            center_x, center_y = center
+        else:
+            center_x = width / 2
+            center_y = height / 2
 
-        # Draw circle boundary
-        cr.set_source_rgba(0.6, 0.6, 0.6, 0.8)  # Semi-transparent gray
-        cr.set_line_width(3)
-        cr.arc(window_center_x, window_center_y, circle_radius, 0, 2 * math.pi)
+        if widget_type != "skill_casting":
+            cr.set_source_rgba(0.6, 0.6, 0.6, 0.8)  # Semi-transparent gray
+            cr.set_line_width(3)
+            cr.arc(center_x, center_y, circle_radius, 0, 2 * math.pi)
+            cr.stroke()
+            return
+
+        vertical_scale_ratio = self.circle_data.get("vertical_scale_ratio", 1.0)
+        dy_bias = self.circle_data.get("dy_bias", 0.0)
+        corrected_center_y = center_y + dy_bias
+
+        # Visual range circle
+        cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
+        cr.set_line_width(2)
+        cr.arc(center_x, center_y, circle_radius, 0, 2 * math.pi)
         cr.stroke()
 
-        # Draw circle center point
-        cr.set_source_rgba(0.5, 0.5, 0.5, 0.9)
-        cr.arc(window_center_x, window_center_y, 4, 0, 2 * math.pi)
+        # Optional corrected-space ellipse guide
+        if vertical_scale_ratio not in (0, 1):
+            cr.save()
+            cr.translate(center_x, corrected_center_y)
+            cr.scale(1.0, vertical_scale_ratio)
+            cr.set_source_rgba(0.2, 0.7, 1.0, 0.2)
+            cr.set_line_width(1)
+            cr.arc(0, 0, circle_radius, 0, 2 * math.pi)
+            cr.stroke()
+            cr.restore()
+
+        # Anchor crosshair at visual center
+        crosshair_size = 8
+        cr.set_source_rgba(0.2, 0.7, 1.0, 0.9)
+        cr.set_line_width(2)
+        cr.move_to(center_x - crosshair_size, center_y)
+        cr.line_to(center_x + crosshair_size, center_y)
+        cr.move_to(center_x, center_y - crosshair_size)
+        cr.line_to(center_x, center_y + crosshair_size)
+        cr.stroke()
+
+        # Corrected center marker
+        cr.set_source_rgba(1.0, 0.4, 0.4, 0.8)
+        cr.arc(center_x, corrected_center_y, 4, 0, 2 * math.pi)
         cr.fill()
 
 

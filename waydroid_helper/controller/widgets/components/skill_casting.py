@@ -14,6 +14,10 @@ from typing import TYPE_CHECKING, cast
 
 from waydroid_helper.controller.widgets.components.cancel_casting import \
     CancelCasting
+from waydroid_helper.controller.widgets.components.skill_casting_v2 import (
+    SkillCastingCalibration,
+    map_pointer_to_widget_target,
+)
 from waydroid_helper.util.log import logger
 
 if TYPE_CHECKING:
@@ -157,6 +161,8 @@ class SkillCasting(BaseWidget):
     ANGLE_WARP_EPSILON_DEG = 5.0
     ANGLE_WARP_HANDLE_RADIUS = 6
     ANGLE_WARP_HANDLE_DISTANCE = 90.0
+    VERTICAL_SCALE_RATIO = 0.745
+    DY_BIAS = 78.0
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -667,430 +673,6 @@ class SkillCasting(BaseWidget):
                 "Controller Widgets", "Apply the manual center coordinates."
             ),
         )
-        gain_enabled_config = create_switch_config(
-            key=self.GAIN_ENABLED_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Enable Ellipse Correction"),
-            value=True,
-            description=pgettext(
-                "Controller Widgets",
-                "Enable gain-based correction for non-circular movement inputs.",
-            ),
-        )
-        x_gain_config = create_text_config(
-            key=self.X_GAIN_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "X Gain"),
-            value=str(self.GAIN_DEFAULT),
-            description=pgettext(
-                "Controller Widgets", "Persisted X gain for ellipse correction."
-            ),
-            visible=False,
-        )
-        y_gain_config = create_text_config(
-            key=self.Y_GAIN_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Y Gain"),
-            value=str(self.GAIN_DEFAULT),
-            description=pgettext(
-                "Controller Widgets", "Persisted Y gain for ellipse correction."
-            ),
-            visible=False,
-        )
-        x_gain_input_config = create_text_config(
-            key=self.X_GAIN_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "X Gain"),
-            value=str(self.GAIN_DEFAULT),
-            description=pgettext(
-                "Controller Widgets", "Ellipse correction gain for X axis (0.5–2.0)."
-            ),
-        )
-        y_gain_input_config = create_text_config(
-            key=self.Y_GAIN_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Y Gain"),
-            value=str(self.GAIN_DEFAULT),
-            description=pgettext(
-                "Controller Widgets", "Ellipse correction gain for Y axis (0.5–2.0)."
-            ),
-        )
-        apply_gain_config = create_action_config(
-            key=self.APPLY_GAIN_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Apply Gains"),
-            button_label=pgettext("Controller Widgets", "Apply"),
-            description=pgettext(
-                "Controller Widgets", "Validate and apply ellipse correction gains."
-            ),
-        )
-        tune_angle_config = create_action_config(
-            key=self.TUNE_ANGLE_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Tune Angle"),
-            button_label=pgettext("Controller Widgets", "Tune"),
-            description=pgettext(
-                "Controller Widgets", "Live tuning overlay for ellipse correction."
-            ),
-        )
-        anchor_up_config = create_text_config(
-            key=self.ANCHOR_UP_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Up Anchor Distance"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored upward anchor distance in pixels."
-            ),
-            visible=False,
-        )
-        anchor_down_config = create_text_config(
-            key=self.ANCHOR_DOWN_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Down Anchor Distance"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored downward anchor distance in pixels."
-            ),
-            visible=False,
-        )
-        anchor_left_config = create_text_config(
-            key=self.ANCHOR_LEFT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Left Anchor Distance"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored leftward anchor distance in pixels."
-            ),
-            visible=False,
-        )
-        anchor_right_config = create_text_config(
-            key=self.ANCHOR_RIGHT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Right Anchor Distance"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored rightward anchor distance in pixels."
-            ),
-            visible=False,
-        )
-        anchor_up_input_config = create_text_config(
-            key=self.ANCHOR_UP_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Up Distance (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Distance from center to the upper anchor."
-            ),
-        )
-        anchor_down_input_config = create_text_config(
-            key=self.ANCHOR_DOWN_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Down Distance (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Distance from center to the lower anchor."
-            ),
-        )
-        anchor_left_input_config = create_text_config(
-            key=self.ANCHOR_LEFT_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Left Distance (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Distance from center to the left anchor."
-            ),
-        )
-        anchor_right_input_config = create_text_config(
-            key=self.ANCHOR_RIGHT_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Right Distance (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Distance from center to the right anchor."
-            ),
-        )
-        apply_anchors_config = create_action_config(
-            key=self.APPLY_ANCHORS_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Apply Anchors"),
-            button_label=pgettext("Controller Widgets", "Apply"),
-            description=pgettext(
-                "Controller Widgets",
-                "Validate and apply the four anchor distances.",
-            ),
-        )
-        reset_anchors_config = create_action_config(
-            key=self.RESET_ANCHORS_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Reset Anchors"),
-            button_label=pgettext("Controller Widgets", "Reset"),
-            description=pgettext(
-                "Controller Widgets",
-                "Clear all calibrated anchor distances.",
-            ),
-        )
-        set_anchor_up_config = create_action_config(
-            key=self.SET_ANCHOR_UP_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Set Up"),
-            button_label=pgettext("Controller Widgets", "Set Up"),
-            description=pgettext(
-                "Controller Widgets", "Click the upper boundary on the screen."
-            ),
-        )
-        set_anchor_down_config = create_action_config(
-            key=self.SET_ANCHOR_DOWN_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Set Down"),
-            button_label=pgettext("Controller Widgets", "Set Down"),
-            description=pgettext(
-                "Controller Widgets", "Click the lower boundary on the screen."
-            ),
-        )
-        set_anchor_left_config = create_action_config(
-            key=self.SET_ANCHOR_LEFT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Set Left"),
-            button_label=pgettext("Controller Widgets", "Set Left"),
-            description=pgettext(
-                "Controller Widgets", "Click the left boundary on the screen."
-            ),
-        )
-        set_anchor_right_config = create_action_config(
-            key=self.SET_ANCHOR_RIGHT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Set Right"),
-            button_label=pgettext("Controller Widgets", "Set Right"),
-            description=pgettext(
-                "Controller Widgets", "Click the right boundary on the screen."
-            ),
-        )
-        cancel_anchor_set_config = create_action_config(
-            key=self.CANCEL_ANCHOR_SET_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Cancel Anchor Set"),
-            button_label=pgettext("Controller Widgets", "Cancel"),
-            description=pgettext(
-                "Controller Widgets", "Exit anchor capture mode without saving."
-            ),
-        )
-        anchor_deadzone_config = create_text_config(
-            key=self.ANCHOR_DEADZONE_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Deadzone (0-1)"),
-            value=f"{self.DEADZONE_DEFAULT:.2f}",
-            description=pgettext(
-                "Controller Widgets",
-                "Normalized deadzone before movement begins (0.0–1.0).",
-            ),
-        )
-        diag_ur_dx_config = create_text_config(
-            key=self.DIAG_UR_DX_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal UR X"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal up-right X offset."
-            ),
-            visible=False,
-        )
-        diag_ur_dy_config = create_text_config(
-            key=self.DIAG_UR_DY_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal UR Y"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal up-right Y offset."
-            ),
-            visible=False,
-        )
-        diag_dr_dx_config = create_text_config(
-            key=self.DIAG_DR_DX_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal DR X"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal down-right X offset."
-            ),
-            visible=False,
-        )
-        diag_dr_dy_config = create_text_config(
-            key=self.DIAG_DR_DY_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal DR Y"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal down-right Y offset."
-            ),
-            visible=False,
-        )
-        diag_dl_dx_config = create_text_config(
-            key=self.DIAG_DL_DX_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal DL X"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal down-left X offset."
-            ),
-            visible=False,
-        )
-        diag_dl_dy_config = create_text_config(
-            key=self.DIAG_DL_DY_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal DL Y"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal down-left Y offset."
-            ),
-            visible=False,
-        )
-        diag_ul_dx_config = create_text_config(
-            key=self.DIAG_UL_DX_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal UL X"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal up-left X offset."
-            ),
-            visible=False,
-        )
-        diag_ul_dy_config = create_text_config(
-            key=self.DIAG_UL_DY_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal UL Y"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Stored diagonal up-left Y offset."
-            ),
-            visible=False,
-        )
-        diag_ur_dx_input_config = create_text_config(
-            key=self.DIAG_UR_DX_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "UR dx (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Up-right diagonal X offset from center."
-            ),
-        )
-        diag_ur_dy_input_config = create_text_config(
-            key=self.DIAG_UR_DY_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "UR dy (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Up-right diagonal Y offset from center."
-            ),
-        )
-        diag_dr_dx_input_config = create_text_config(
-            key=self.DIAG_DR_DX_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "DR dx (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Down-right diagonal X offset from center."
-            ),
-        )
-        diag_dr_dy_input_config = create_text_config(
-            key=self.DIAG_DR_DY_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "DR dy (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Down-right diagonal Y offset from center."
-            ),
-        )
-        diag_dl_dx_input_config = create_text_config(
-            key=self.DIAG_DL_DX_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "DL dx (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Down-left diagonal X offset from center."
-            ),
-        )
-        diag_dl_dy_input_config = create_text_config(
-            key=self.DIAG_DL_DY_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "DL dy (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Down-left diagonal Y offset from center."
-            ),
-        )
-        diag_ul_dx_input_config = create_text_config(
-            key=self.DIAG_UL_DX_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "UL dx (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Up-left diagonal X offset from center."
-            ),
-        )
-        diag_ul_dy_input_config = create_text_config(
-            key=self.DIAG_UL_DY_INPUT_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "UL dy (px)"),
-            value="",
-            description=pgettext(
-                "Controller Widgets", "Up-left diagonal Y offset from center."
-            ),
-        )
-        apply_diagonals_config = create_action_config(
-            key=self.APPLY_DIAGONALS_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Apply Diagonals"),
-            button_label=pgettext("Controller Widgets", "Apply"),
-            description=pgettext(
-                "Controller Widgets",
-                "Validate and apply diagonal offsets for the boundary.",
-            ),
-        )
-        reset_diagonals_config = create_action_config(
-            key=self.RESET_DIAGONALS_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Reset Diagonals"),
-            button_label=pgettext("Controller Widgets", "Reset"),
-            description=pgettext(
-                "Controller Widgets",
-                "Clear diagonal offsets and regenerate defaults.",
-            ),
-        )
-        show_debug_boundary_config = create_switch_config(
-            key=self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Show Debug Boundary (Edit Mode)"),
-            value=True,
-            description=pgettext(
-                "Controller Widgets",
-                "Show the boundary/center debug overlay while editing this widget.",
-            ),
-        )
-        angle_warp_enabled_config = create_switch_config(
-            key=self.ANGLE_WARP_ENABLED_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Angle warp (fix diagonals)"),
-            value=True,
-            description=pgettext(
-                "Controller Widgets",
-                "Remap real diagonal sectors to ideal angles to fix distorted circles.",
-            ),
-        )
-        angle_warp_bounds_config = create_text_config(
-            key=self.ANGLE_WARP_BOUNDS_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Angle Warp Bounds"),
-            value=self.ANGLE_WARP_DEFAULT_BOUNDS,
-            description=pgettext(
-                "Controller Widgets",
-                "Internal list of real boundary angles (degrees).",
-            ),
-            visible=False,
-        )
-        angle_warp_45_config = create_slider_config(
-            key=self.ANGLE_WARP_BOUND_45_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal 45° boundary"),
-            value=45.0,
-            min_value=5.0,
-            max_value=85.0,
-            step=1.0,
-            description=pgettext(
-                "Controller Widgets",
-                "Adjust the 45° diagonal boundary between 0° and 90°.",
-            ),
-        )
-        angle_warp_135_config = create_slider_config(
-            key=self.ANGLE_WARP_BOUND_135_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal 135° boundary"),
-            value=135.0,
-            min_value=95.0,
-            max_value=175.0,
-            step=1.0,
-            description=pgettext(
-                "Controller Widgets",
-                "Adjust the 135° diagonal boundary between 90° and 180°.",
-            ),
-        )
-        angle_warp_225_config = create_slider_config(
-            key=self.ANGLE_WARP_BOUND_225_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal 225° boundary"),
-            value=225.0,
-            min_value=185.0,
-            max_value=265.0,
-            step=1.0,
-            description=pgettext(
-                "Controller Widgets",
-                "Adjust the 225° diagonal boundary between 180° and 270°.",
-            ),
-        )
-        angle_warp_315_config = create_slider_config(
-            key=self.ANGLE_WARP_BOUND_315_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Diagonal 315° boundary"),
-            value=315.0,
-            min_value=275.0,
-            max_value=355.0,
-            step=1.0,
-            description=pgettext(
-                "Controller Widgets",
-                "Adjust the 315° diagonal boundary between 270° and 360°.",
-            ),
-        )
 
         self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
@@ -1102,54 +684,6 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(apply_center_config)
-        self.add_config_item(gain_enabled_config)
-        self.add_config_item(x_gain_config)
-        self.add_config_item(y_gain_config)
-        self.add_config_item(x_gain_input_config)
-        self.add_config_item(y_gain_input_config)
-        self.add_config_item(apply_gain_config)
-        self.add_config_item(tune_angle_config)
-        self.add_config_item(anchor_up_config)
-        self.add_config_item(anchor_down_config)
-        self.add_config_item(anchor_left_config)
-        self.add_config_item(anchor_right_config)
-        self.add_config_item(anchor_up_input_config)
-        self.add_config_item(anchor_down_input_config)
-        self.add_config_item(anchor_left_input_config)
-        self.add_config_item(anchor_right_input_config)
-        self.add_config_item(apply_anchors_config)
-        self.add_config_item(reset_anchors_config)
-        self.add_config_item(set_anchor_up_config)
-        self.add_config_item(set_anchor_down_config)
-        self.add_config_item(set_anchor_left_config)
-        self.add_config_item(set_anchor_right_config)
-        self.add_config_item(cancel_anchor_set_config)
-        self.add_config_item(anchor_deadzone_config)
-        self.add_config_item(diag_ur_dx_config)
-        self.add_config_item(diag_ur_dy_config)
-        self.add_config_item(diag_dr_dx_config)
-        self.add_config_item(diag_dr_dy_config)
-        self.add_config_item(diag_dl_dx_config)
-        self.add_config_item(diag_dl_dy_config)
-        self.add_config_item(diag_ul_dx_config)
-        self.add_config_item(diag_ul_dy_config)
-        self.add_config_item(diag_ur_dx_input_config)
-        self.add_config_item(diag_ur_dy_input_config)
-        self.add_config_item(diag_dr_dx_input_config)
-        self.add_config_item(diag_dr_dy_input_config)
-        self.add_config_item(diag_dl_dx_input_config)
-        self.add_config_item(diag_dl_dy_input_config)
-        self.add_config_item(diag_ul_dx_input_config)
-        self.add_config_item(diag_ul_dy_input_config)
-        self.add_config_item(apply_diagonals_config)
-        self.add_config_item(reset_diagonals_config)
-        self.add_config_item(show_debug_boundary_config)
-        self.add_config_item(angle_warp_enabled_config)
-        self.add_config_item(angle_warp_bounds_config)
-        self.add_config_item(angle_warp_45_config)
-        self.add_config_item(angle_warp_135_config)
-        self.add_config_item(angle_warp_225_config)
-        self.add_config_item(angle_warp_315_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
@@ -1165,84 +699,12 @@ class SkillCasting(BaseWidget):
         self.add_config_change_callback(
             self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
         )
-        self.add_config_change_callback(
-            self.GAIN_ENABLED_CONFIG_KEY, self._on_gain_enabled_changed
-        )
-        self.add_config_change_callback(
-            self.APPLY_GAIN_CONFIG_KEY, self._on_apply_gain_clicked
-        )
-        self.add_config_change_callback(
-            self.TUNE_ANGLE_CONFIG_KEY, self._on_tune_angle_clicked
-        )
-        self.add_config_change_callback(
-            self.APPLY_ANCHORS_CONFIG_KEY, self._on_apply_anchors_clicked
-        )
-        self.add_config_change_callback(
-            self.RESET_ANCHORS_CONFIG_KEY, self._on_reset_anchors_clicked
-        )
-        self.add_config_change_callback(
-            self.SET_ANCHOR_UP_CONFIG_KEY, self._on_set_anchor_up_clicked
-        )
-        self.add_config_change_callback(
-            self.SET_ANCHOR_DOWN_CONFIG_KEY, self._on_set_anchor_down_clicked
-        )
-        self.add_config_change_callback(
-            self.SET_ANCHOR_LEFT_CONFIG_KEY, self._on_set_anchor_left_clicked
-        )
-        self.add_config_change_callback(
-            self.SET_ANCHOR_RIGHT_CONFIG_KEY, self._on_set_anchor_right_clicked
-        )
-        self.add_config_change_callback(
-            self.CANCEL_ANCHOR_SET_CONFIG_KEY, self._on_cancel_anchor_set_clicked
-        )
-        self.add_config_change_callback(
-            self.APPLY_DIAGONALS_CONFIG_KEY, self._on_apply_diagonals_clicked
-        )
-        self.add_config_change_callback(
-            self.RESET_DIAGONALS_CONFIG_KEY, self._on_reset_diagonals_clicked
-        )
-        self.add_config_change_callback(
-            self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_WARP_ENABLED_CONFIG_KEY, self._on_angle_warp_enabled_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_WARP_BOUND_45_CONFIG_KEY, self._on_angle_warp_bound_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_WARP_BOUND_135_CONFIG_KEY, self._on_angle_warp_bound_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_WARP_BOUND_225_CONFIG_KEY, self._on_angle_warp_bound_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_WARP_BOUND_315_CONFIG_KEY, self._on_angle_warp_bound_changed
-        )
 
         self._sync_center_inputs()
-        self._sync_gain_inputs()
-        self._sync_anchor_inputs()
-        self._ensure_diagonal_defaults()
-        self._sync_diagonal_inputs()
-        self._ensure_angle_warp_defaults()
-        self._sync_angle_warp_sliders()
-        self._set_angle_warp_controls_visible(self._is_angle_warp_enabled())
-        self._set_gain_controls_visible(self._is_gain_enabled())
-        self._set_anchor_controls_visible(not self.mapping_mode)
-        self._set_diagonal_controls_visible(
-            self._are_anchor_distances_valid() and not self.mapping_mode
-        )
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
                 self._sync_center_inputs(),
-                self._sync_gain_inputs(),
-                self._sync_anchor_inputs(),
-                self._sync_diagonal_inputs(),
-                self._ensure_angle_warp_defaults(),
-                self._sync_angle_warp_sliders(),
-                self._set_angle_warp_controls_visible(self._is_angle_warp_enabled()),
                 self._update_circle_if_selected(),
                 self._emit_overlay_event("refresh"),
             ),
@@ -1288,7 +750,7 @@ class SkillCasting(BaseWidget):
         intro = Gtk.Label(
             label=pgettext(
                 "Controller Widgets",
-                "Configure casting behavior, calibration, and boundary mapping.",
+                "Configure casting behavior and center calibration.",
             ),
             xalign=0,
         )
@@ -1360,122 +822,6 @@ class SkillCasting(BaseWidget):
                 expanded=True,
             )
         )
-
-        tune_hint = Gtk.Label(
-            label=pgettext(
-                "Controller Widgets",
-                "Tuning overlay is available while in Mapping mode.",
-            ),
-            xalign=0,
-        )
-        tune_hint.set_wrap(True)
-
-        panel.append(
-            build_section(
-                pgettext("Controller Widgets", "Direction Mapping"),
-                [
-                    self.GAIN_ENABLED_CONFIG_KEY,
-                    self.X_GAIN_INPUT_CONFIG_KEY,
-                    self.Y_GAIN_INPUT_CONFIG_KEY,
-                    self.APPLY_GAIN_CONFIG_KEY,
-                    self.TUNE_ANGLE_CONFIG_KEY,
-                ],
-                description=pgettext(
-                    "Controller Widgets",
-                    "Use ellipse correction gains to compensate for uneven movement wheels.",
-                ),
-                expanded=True,
-                extra_widgets=[tune_hint],
-            )
-        )
-
-        panel.append(
-            build_section(
-                pgettext("Controller Widgets", "Angle Warp Calibration"),
-                [
-                    self.ANGLE_WARP_ENABLED_CONFIG_KEY,
-                    self.ANGLE_WARP_BOUND_45_CONFIG_KEY,
-                    self.ANGLE_WARP_BOUND_135_CONFIG_KEY,
-                    self.ANGLE_WARP_BOUND_225_CONFIG_KEY,
-                    self.ANGLE_WARP_BOUND_315_CONFIG_KEY,
-                ],
-                description=pgettext(
-                    "Controller Widgets",
-                    "Adjust diagonal sector boundaries to correct distorted casting angles.",
-                ),
-                expanded=False,
-            )
-        )
-
-        panel.append(
-            build_section(
-                pgettext("Controller Widgets", "Anchor Calibration"),
-                [
-                    self.ANCHOR_UP_INPUT_CONFIG_KEY,
-                    self.ANCHOR_DOWN_INPUT_CONFIG_KEY,
-                    self.ANCHOR_LEFT_INPUT_CONFIG_KEY,
-                    self.ANCHOR_RIGHT_INPUT_CONFIG_KEY,
-                    self.ANCHOR_DEADZONE_CONFIG_KEY,
-                    self.APPLY_ANCHORS_CONFIG_KEY,
-                    self.RESET_ANCHORS_CONFIG_KEY,
-                    self.SET_ANCHOR_UP_CONFIG_KEY,
-                    self.SET_ANCHOR_DOWN_CONFIG_KEY,
-                    self.SET_ANCHOR_LEFT_CONFIG_KEY,
-                    self.SET_ANCHOR_RIGHT_CONFIG_KEY,
-                    self.CANCEL_ANCHOR_SET_CONFIG_KEY,
-                ],
-                description=pgettext(
-                    "Controller Widgets",
-                    "Define four anchor distances from the calibrated center (in pixels).",
-                ),
-                expanded=False,
-            )
-        )
-
-        self._diag_warning_label = Gtk.Label(xalign=0)
-        self._diag_warning_label.set_wrap(True)
-        self._diag_warning_label.add_css_class("warning")
-        self._diag_warning_label.set_visible(False)
-
-        panel.append(
-            build_section(
-                pgettext("Controller Widgets", "Diagonal Boundary"),
-                [
-                    self.DIAG_UR_DX_INPUT_CONFIG_KEY,
-                    self.DIAG_UR_DY_INPUT_CONFIG_KEY,
-                    self.DIAG_DR_DX_INPUT_CONFIG_KEY,
-                    self.DIAG_DR_DY_INPUT_CONFIG_KEY,
-                    self.DIAG_DL_DX_INPUT_CONFIG_KEY,
-                    self.DIAG_DL_DY_INPUT_CONFIG_KEY,
-                    self.DIAG_UL_DX_INPUT_CONFIG_KEY,
-                    self.DIAG_UL_DY_INPUT_CONFIG_KEY,
-                    self.APPLY_DIAGONALS_CONFIG_KEY,
-                    self.RESET_DIAGONALS_CONFIG_KEY,
-                ],
-                description=pgettext(
-                    "Controller Widgets",
-                    "Fine-tune the diagonal boundary points after the axis anchors are set.",
-                ),
-                expanded=False,
-                extra_widgets=[self._diag_warning_label],
-            )
-        )
-
-        panel.append(
-            build_section(
-                pgettext("Controller Widgets", "Debug Overlay"),
-                [self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY],
-                description=pgettext(
-                    "Controller Widgets",
-                    "Toggle the edit-mode boundary and center markers for this widget.",
-                ),
-                expanded=False,
-            )
-        )
-
-        tune_widget = config_manager.ui_widgets.get(self.TUNE_ANGLE_CONFIG_KEY)
-        if tune_widget is not None:
-            tune_widget.set_sensitive(self.mapping_mode)
 
         return panel
 
@@ -2916,11 +2262,15 @@ class SkillCasting(BaseWidget):
 
     def _update_circle_if_selected(self):
         """如果当前组件被选中，更新圆形绘制"""
-        if self.is_selected and not self.mapping_mode and self.is_debug_boundary_enabled():
+        if self.is_selected and not self.mapping_mode:
+            calibration = self._get_v2_calibration()
             circle_data = {
                 "widget_id": id(self),
                 "widget_type": "skill_casting",
-                "circle_radius": self.get_config_value("circle_radius"),
+                "circle_radius": calibration.radius,
+                "center": (calibration.center_x, calibration.center_y),
+                "vertical_scale_ratio": calibration.vertical_scale_ratio,
+                "dy_bias": calibration.dy_bias,
                 "action": "show",
             }
         else:
@@ -3178,6 +2528,19 @@ class SkillCasting(BaseWidget):
         w, h = self.screen_info.get_host_resolution()
         return w, h
 
+    def _get_v2_calibration(self) -> SkillCastingCalibration:
+        center_x, center_y = self._get_window_center()
+        outer_radius = self.get_config_value("circle_radius")
+        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
+            outer_radius = 200
+        return SkillCastingCalibration(
+            center_x=center_x,
+            center_y=center_y,
+            radius=float(outer_radius),
+            vertical_scale_ratio=self.VERTICAL_SCALE_RATIO,
+            dy_bias=self.DY_BIAS,
+        )
+
     def _map_circle_to_circle(
         self, mouse_x: float, mouse_y: float
     ) -> tuple[float, float]:
@@ -3187,69 +2550,19 @@ class SkillCasting(BaseWidget):
         外圆：窗口中心为圆心，半径按百分比缩放
         内圆：widget中心为圆心，宽度/2为半径
         """
-        window_center_x, window_center_y = self._get_window_center()
-
         widget_center_x = self.center_x
         widget_center_y = self.center_y
         widget_radius = self.width / 2
+        calibration = self._get_v2_calibration()
 
-        outer_radius = self.get_config_value("circle_radius")
-        if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
-            outer_radius = 200
-
-        rel_x = mouse_x - window_center_x
-        rel_y = mouse_y - window_center_y
-
-        x_gain, y_gain = self._get_gains()
-        rel_x *= x_gain
-        rel_y *= y_gain
-
-        distance = math.sqrt(rel_x * rel_x + rel_y * rel_y)
-
-        if distance == 0:
-            return (widget_center_x, widget_center_y)
-
-        theta_real = self._vector_to_angle(rel_x, rel_y)
-        theta_ideal = theta_real
-        sector_idx = None
-        if self._is_angle_warp_enabled():
-            bounds = self._get_angle_warp_real_bounds()
-            if bounds is not None:
-                theta_ideal, sector_idx, _t = self._warp_angle_with_details(
-                    theta_real, bounds, sectors=len(bounds), epsilon=self.ANGLE_WARP_EPSILON_DEG
-                )
-        if sector_idx is not None:
-            logger.debug(
-                "SkillCasting angle warp: real=%.2f ideal=%.2f sector=%d",
-                theta_real,
-                theta_ideal,
-                sector_idx,
-            )
-
-        anchor_vector = self._get_anchor_normalized_vector(
-            window_center_x,
-            window_center_y,
+        return map_pointer_to_widget_target(
             mouse_x,
             mouse_y,
-            angle_deg_override=theta_ideal,
-            length_override=distance,
+            calibration,
+            widget_center_x,
+            widget_center_y,
+            widget_radius,
         )
-        if anchor_vector is not None:
-            nx, ny = anchor_vector
-            return (
-                widget_center_x + nx * widget_radius,
-                widget_center_y + ny * widget_radius,
-            )
-
-        theta_rad = math.radians(theta_ideal)
-        rel_x = math.cos(theta_rad) * distance
-        rel_y = math.sin(theta_rad) * distance
-
-        ratio = min(distance / outer_radius, 1.0)
-        target_x = widget_center_x + (rel_x / distance) * ratio * widget_radius
-        target_y = widget_center_y + (rel_y / distance) * ratio * widget_radius
-
-        return (target_x, target_y)
 
     def _emit_touch_event(
         self, action: AMotionEventAction, position: tuple[float, float] | None = None
@@ -3371,10 +2684,6 @@ class SkillCasting(BaseWidget):
 
     def set_mapping_mode(self, mapping_mode: bool) -> None:
         super().set_mapping_mode(mapping_mode)
-        self._set_anchor_controls_visible(not mapping_mode)
-        self._set_diagonal_controls_visible(
-            self._are_anchor_distances_valid() and not mapping_mode
-        )
         if mapping_mode:
             self.cancel_anchor_set()
             self.cancel_tuning()
