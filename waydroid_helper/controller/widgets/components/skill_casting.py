@@ -193,7 +193,10 @@ class SkillCasting(BaseWidget):
         self._mouse_x: float = 0
         self._mouse_y: float = 0
 
-        self._calibration_mode: bool = False
+        self._center_calibration_active: bool = False
+        self._calibration_status_label: Gtk.Label | None = None
+        self._radius_adjustment: Gtk.Adjustment | None = None
+        self._radius_adjustment_updating: bool = False
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
@@ -643,6 +646,12 @@ class SkillCasting(BaseWidget):
         try:
             # self.circle_radius = int(value)
             # 如果当前选中状态，重新发送圆形绘制事件
+            if self._radius_adjustment is not None and not self._radius_adjustment_updating:
+                self._radius_adjustment_updating = True
+                try:
+                    self._radius_adjustment.set_value(float(value))
+                finally:
+                    self._radius_adjustment_updating = False
             self._update_circle_if_selected()
         except (ValueError, TypeError):
             pass
@@ -721,17 +730,26 @@ class SkillCasting(BaseWidget):
             expander.set_child(box)
             return expander
 
+        radius_control = self._build_radius_control(config_manager)
+
         panel.append(
             build_section(
                 pgettext("Controller Widgets", "Casting Behavior"),
-                ["circle_radius", "cast_timing", "enable_cancel_button"],
+                ["cast_timing", "enable_cancel_button"],
                 description=pgettext(
                     "Controller Widgets",
                     "Adjust how the skill is cast and whether a cancel button is shown.",
                 ),
                 expanded=True,
+                extra_widgets=[radius_control],
             )
         )
+
+        status_label = Gtk.Label(label="", xalign=0)
+        status_label.set_wrap(True)
+        self._calibration_status_label = status_label
+        self._update_calibration_status_label()
+        self._update_calibration_button_label()
 
         panel.append(
             build_section(
@@ -748,6 +766,7 @@ class SkillCasting(BaseWidget):
                     "Calibrate by clicking the character position on screen, or enter pixel coordinates manually.",
                 ),
                 expanded=True,
+                extra_widgets=[status_label],
             )
         )
 
@@ -758,7 +777,7 @@ class SkillCasting(BaseWidget):
     ) -> None:
         if restoring:
             return
-        self._set_calibration_mode(True)
+        self._set_calibration_mode(not self._center_calibration_active)
 
     def _on_reset_center_clicked(
         self, key: str, value: bool, restoring: bool
@@ -797,16 +816,7 @@ class SkillCasting(BaseWidget):
         y = data.get("y")
         if x is None or y is None:
             return
-        w, h = self._get_window_size()
-        if x < 0 or y < 0 or x >= w or y >= h:
-            return
-        if not self._calibration_mode:
-            return
-        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
-        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
-        self._sync_center_inputs()
-        self._set_calibration_mode(False)
-        self._emit_overlay_event("refresh")
+        self._apply_calibration_click(float(x), float(y))
 
     def _get_calibrated_center(self) -> tuple[float, float] | None:
         raw_x = self.get_config_value(self.CENTER_X_CONFIG_KEY)
@@ -833,7 +843,9 @@ class SkillCasting(BaseWidget):
         self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
 
     def _set_calibration_mode(self, active: bool) -> None:
-        self._calibration_mode = active
+        self._center_calibration_active = active
+        self._update_calibration_button_label()
+        self._update_calibration_status_label()
         self._emit_overlay_event("start" if active else "stop")
 
     def _emit_overlay_event(self, action: str) -> None:
@@ -853,12 +865,121 @@ class SkillCasting(BaseWidget):
 
     @property
     def is_calibrating(self) -> bool:
-        return self._calibration_mode
+        return self._center_calibration_active
 
     def cancel_calibration(self) -> None:
-        if not self._calibration_mode:
+        if not self._center_calibration_active:
             return
         self._set_calibration_mode(False)
+
+    def is_center_overlay_enabled(self) -> bool:
+        return False
+
+    def should_hide_settings_panel_on_calibration(self) -> bool:
+        return False
+
+    def handle_calibration_click(self, x: float, y: float, button: int) -> bool:
+        if not self._center_calibration_active:
+            return False
+        if button != Gdk.BUTTON_PRIMARY:
+            return False
+        return self._apply_calibration_click(x, y)
+
+    def _apply_calibration_click(self, x: float, y: float) -> bool:
+        if not self._center_calibration_active:
+            return False
+        w, h = self._get_window_size()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            return False
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._set_calibration_mode(False)
+        self._emit_overlay_event("refresh")
+        return True
+
+    def _update_calibration_button_label(self) -> None:
+        manager = self.get_config_manager()
+        widget = manager.ui_widgets.get(self.CALIBRATE_CENTER_CONFIG_KEY)
+        if not isinstance(widget, Gtk.Box):
+            return
+        button = widget.get_last_child()
+        if not isinstance(button, Gtk.Button):
+            return
+        label = (
+            pgettext("Controller Widgets", "Cancel calibration")
+            if self._center_calibration_active
+            else pgettext("Controller Widgets", "Calibrate")
+        )
+        button.set_label(label)
+
+    def _update_calibration_status_label(self) -> None:
+        if self._calibration_status_label is None:
+            return
+        if self._center_calibration_active:
+            self._calibration_status_label.set_label(
+                pgettext(
+                    "Controller Widgets",
+                    "Click on the screen to set center, or press Esc to cancel.",
+                )
+            )
+        else:
+            self._calibration_status_label.set_label("")
+
+    def _build_radius_control(self, config_manager) -> Gtk.Widget:
+        config = config_manager.get_config("circle_radius")
+        min_value = 50
+        max_value = 500
+        current_value = 200
+        if config is not None:
+            min_value = getattr(config, "min_value", min_value)
+            max_value = getattr(config, "max_value", max_value)
+            current_value = config.value if config.value is not None else current_value
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        label = Gtk.Label(label=pgettext("Controller Widgets", "Casting Radius"), xalign=0)
+        if config is not None:
+            label.set_tooltip_text(config.description)
+        box.append(label)
+
+        adjustment = Gtk.Adjustment(
+            value=float(current_value),
+            lower=float(min_value),
+            upper=float(max_value),
+            step_increment=1.0,
+            page_increment=10.0,
+        )
+        self._radius_adjustment = adjustment
+
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adjustment)
+        scale.set_draw_value(False)
+        scale.set_digits(0)
+        scale.set_hexpand(True)
+
+        spin = Gtk.SpinButton()
+        spin.set_adjustment(adjustment)
+        spin.set_digits(0)
+        spin.set_numeric(True)
+        spin.set_width_chars(6)
+
+        def on_radius_changed(_adjustment):
+            if self._radius_adjustment_updating:
+                return
+            value = int(round(adjustment.get_value()))
+            value = max(int(min_value), min(int(max_value), value))
+            self._radius_adjustment_updating = True
+            try:
+                adjustment.set_value(value)
+            finally:
+                self._radius_adjustment_updating = False
+            self.set_config_value("circle_radius", value)
+
+        adjustment.connect("value-changed", on_radius_changed)
+
+        box.append(scale)
+        box.append(spin)
+        box.set_visible(True)
+        return box
 
     # def _on_custom_event(self, event):
     #     """处理自定义事件"""
