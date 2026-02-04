@@ -114,11 +114,6 @@ class CircleOverlay(Gtk.DrawingArea):
         cr.line_to(center_x, center_y + crosshair_size)
         cr.stroke()
 
-        # Corrected center marker
-        cr.set_source_rgba(1.0, 0.4, 0.4, 0.8)
-        cr.arc(center_x, corrected_center_y, 4, 0, 2 * math.pi)
-        cr.fill()
-
 
 class RightClickToWalkOverlay(Gtk.DrawingArea):
     """Overlay for right-click-to-walk calibration and center markers."""
@@ -160,10 +155,6 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.queue_draw()
 
     def set_active_widget(self, widget: object | None) -> None:
-        if not self.mapping_mode:
-            self.active_widget = None
-            self.queue_draw()
-            return
         self.active_widget = widget
         if widget is not None:
             self.register_widget(widget)
@@ -211,6 +202,13 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
     def handle_edit_mouse_pressed(self, x: float, y: float, button: int) -> bool:
         if self.mapping_mode or button != Gdk.BUTTON_PRIMARY:
             return False
+        if (
+            self.active_widget is not None
+            and getattr(self.active_widget, "is_calibrating", False)
+        ):
+            handle_click = getattr(self.active_widget, "handle_calibration_click", None)
+            if callable(handle_click):
+                return bool(handle_click(float(x), float(y), button))
         if self.drag_widget is not None:
             return True
         target_angle = self._find_angle_warp_handle(x, y)
@@ -510,6 +508,9 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                     continue
                 center = get_center()
                 if center is None:
+                    continue
+                show_center_overlay = getattr(center_widget, "is_center_overlay_enabled", None)
+                if callable(show_center_overlay) and not show_center_overlay():
                     continue
                 self._draw_crosshair(cr, center[0], center[1])
                 get_anchor_overlay = getattr(center_widget, "get_anchor_overlay_data", None)
@@ -1019,7 +1020,12 @@ class TransparentWindow(Adw.Window):
             return
         if action == "start":
             self.right_click_overlay.set_active_widget(widget)
-            self._set_settings_panel_visible(False, widget)
+            should_hide_panel = True
+            panel_visibility = getattr(widget, "should_hide_settings_panel_on_calibration", None)
+            if callable(panel_visibility):
+                should_hide_panel = bool(panel_visibility())
+            if should_hide_panel:
+                self._set_settings_panel_visible(False, widget)
             self._set_mask_interactive(True)
             self._set_mask_dimmed(True)
             return
