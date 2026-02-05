@@ -1063,6 +1063,7 @@ class SkillCasting(BaseWidget):
                 "widget_type": "skill_casting",
                 "circle_radius": calibration.radius,
                 "center": (calibration.center_x, calibration.center_y),
+                "anchor_center": (calibration.center_x, calibration.center_y),
                 "vertical_scale_ratio": calibration.vertical_scale_ratio,
                 "y_offset": calibration.y_offset,
                 "action": "show",

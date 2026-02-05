@@ -72,7 +72,8 @@ class CircleOverlay(Gtk.DrawingArea):
 
         # Get circle parameters
         circle_radius = self.circle_data.get("circle_radius", 200)
-        center = self.circle_data.get("center")
+        anchor_center = self.circle_data.get("anchor_center")
+        center = anchor_center or self.circle_data.get("center")
         widget_type = self.circle_data.get("widget_type")
 
         # Calculate circle parameters
