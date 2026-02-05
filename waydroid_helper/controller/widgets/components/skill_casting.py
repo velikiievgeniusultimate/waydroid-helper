@@ -5,7 +5,9 @@
 """
 
 import asyncio
+import csv
 import math
+import os
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -96,6 +98,9 @@ class SkillCasting(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
+    ENABLE_MAPPING_DEBUG_CONFIG_KEY = "skill_enable_mapping_debug"
+    EXPORT_MAPPING_DEBUG_CONFIG_KEY = "skill_export_mapping_debug"
+    CLEAR_MAPPING_DEBUG_CONFIG_KEY = "skill_clear_mapping_debug"
     VERTICAL_SCALE_RATIO = 0.745
 
     # 映射模式固定尺寸
@@ -197,6 +202,8 @@ class SkillCasting(BaseWidget):
         self._calibration_status_label: Gtk.Label | None = None
         self._radius_adjustment: Gtk.Adjustment | None = None
         self._radius_adjustment_updating: bool = False
+        self._mapping_debug_samples: list[dict[str, float]] = []
+        self._mapping_debug_max_samples: int = 5000
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
@@ -332,6 +339,9 @@ class SkillCasting(BaseWidget):
 
         self._mouse_x, self._mouse_y = event.data["position"]
         mapped_target = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+        self._record_mapping_debug_sample(
+            self._mouse_x, self._mouse_y, mapped_target[0], mapped_target[1]
+        )
 
         if self._skill_state == SkillState.INACTIVE:
             # 未激活状态下不处理鼠标移动
@@ -381,6 +391,9 @@ class SkillCasting(BaseWidget):
         """激活技能"""
         # 将鼠标位置映射到虚拟摇杆位置
         mapped_target = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+        self._record_mapping_debug_sample(
+            self._mouse_x, self._mouse_y, mapped_target[0], mapped_target[1]
+        )
 
         # 设置目标位置并锁定
         self._target_position = mapped_target
@@ -605,6 +618,33 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
+        enable_mapping_debug_config = create_switch_config(
+            key=self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Enable Mapping Debug"),
+            value=False,
+            description=pgettext(
+                "Controller Widgets",
+                "Collect pointer-to-joystick mapping samples while moving the mouse.",
+            ),
+        )
+        export_mapping_debug_config = create_action_config(
+            key=self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Export Mapping Debug Data"),
+            button_label=pgettext("Controller Widgets", "Export CSV"),
+            description=pgettext(
+                "Controller Widgets",
+                "Export collected mapping samples to a CSV file for offline analysis.",
+            ),
+        )
+        clear_mapping_debug_config = create_action_config(
+            key=self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Clear Mapping Debug Data"),
+            button_label=pgettext("Controller Widgets", "Clear Samples"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear collected mapping samples from memory.",
+            ),
+        )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Apply Anchor Center"),
@@ -624,6 +664,9 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
+        self.add_config_item(enable_mapping_debug_config)
+        self.add_config_item(export_mapping_debug_config)
+        self.add_config_item(clear_mapping_debug_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -642,6 +685,18 @@ class SkillCasting(BaseWidget):
         )
         self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
+        )
+        self.add_config_change_callback(
+            self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_enable_mapping_debug_changed,
+        )
+        self.add_config_change_callback(
+            self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_export_mapping_debug_clicked,
+        )
+        self.add_config_change_callback(
+            self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_clear_mapping_debug_clicked,
         )
 
         self._sync_center_inputs()
@@ -679,6 +734,102 @@ class SkillCasting(BaseWidget):
         self._update_circle_if_selected()
         self._emit_overlay_event("refresh")
 
+    def _on_enable_mapping_debug_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        if not value:
+            logger.info(
+                "SkillCasting %s mapping debug disabled (samples=%s)",
+                id(self),
+                len(self._mapping_debug_samples),
+            )
+
+    def _on_export_mapping_debug_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        self._export_mapping_debug_samples()
+        self.set_config_value(self.EXPORT_MAPPING_DEBUG_CONFIG_KEY, False)
+
+    def _on_clear_mapping_debug_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        self._mapping_debug_samples.clear()
+        logger.info("SkillCasting %s mapping debug samples cleared", id(self))
+        self.set_config_value(self.CLEAR_MAPPING_DEBUG_CONFIG_KEY, False)
+
+    def _is_mapping_debug_enabled(self) -> bool:
+        return bool(self.get_config_value(self.ENABLE_MAPPING_DEBUG_CONFIG_KEY))
+
+    def _record_mapping_debug_sample(
+        self,
+        mouse_x: float,
+        mouse_y: float,
+        mapped_x: float,
+        mapped_y: float,
+    ) -> None:
+        if not self._is_mapping_debug_enabled():
+            return
+
+        calibration = self._get_v2_calibration()
+        raw_dx = mouse_x - calibration.center_x
+        raw_dy = mouse_y - calibration.center_y
+        joystick_dx = mapped_x - self.center_x
+        joystick_dy = mapped_y - self.center_y
+        sample = {
+            "timestamp": time.time(),
+            "state": self._skill_state.value,
+            "mouse_x": mouse_x,
+            "mouse_y": mouse_y,
+            "anchor_center_x": calibration.center_x,
+            "anchor_center_y": calibration.center_y,
+            "ellipse_center_y": calibration.ellipse_center_y,
+            "raw_dx": raw_dx,
+            "raw_dy": raw_dy,
+            "raw_angle_deg": math.degrees(math.atan2(raw_dy, raw_dx)),
+            "mapped_x": mapped_x,
+            "mapped_y": mapped_y,
+            "joystick_center_x": self.center_x,
+            "joystick_center_y": self.center_y,
+            "joystick_dx": joystick_dx,
+            "joystick_dy": joystick_dy,
+            "joystick_angle_deg": math.degrees(math.atan2(joystick_dy, joystick_dx)),
+            "circle_radius": calibration.radius,
+            "vertical_scale_ratio": calibration.vertical_scale_ratio,
+            "y_offset": calibration.y_offset,
+        }
+        self._mapping_debug_samples.append(sample)
+        if len(self._mapping_debug_samples) > self._mapping_debug_max_samples:
+            self._mapping_debug_samples.pop(0)
+
+    def _export_mapping_debug_samples(self) -> None:
+        if not self._mapping_debug_samples:
+            logger.info("SkillCasting %s no mapping samples to export", id(self))
+            return
+
+        data_dir = os.path.join(os.path.expanduser("~"), ".local", "share", "waydroid-helper")
+        os.makedirs(data_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(data_dir, f"skill-casting-mapping-debug-{timestamp}.csv")
+
+        fieldnames = list(self._mapping_debug_samples[0].keys())
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._mapping_debug_samples)
+
+        logger.info(
+            "SkillCasting %s exported %s mapping samples to %s",
+            id(self),
+            len(self._mapping_debug_samples),
+            path,
+        )
+
     def _on_cast_timing_changed(self, key: str, value: str, restoring:bool) -> None:
         """处理施法时机配置变更"""
         try:
@@ -710,7 +861,7 @@ class SkillCasting(BaseWidget):
         intro = Gtk.Label(
             label=pgettext(
                 "Controller Widgets",
-                "Configure casting behavior and affine calibration.",
+                "Configure casting behavior and anchor calibration.",
             ),
             xalign=0,
         )
@@ -791,6 +942,22 @@ class SkillCasting(BaseWidget):
                 ),
                 expanded=True,
                 extra_widgets=[status_label],
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Mapping Debug"),
+                [
+                    self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+                    self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+                    self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Collect and export cursor/joystick mapping samples for later calibration analysis.",
+                ),
+                expanded=False,
             )
         )
 
