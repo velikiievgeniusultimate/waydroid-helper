@@ -31,6 +31,9 @@ class SkillCastingCalibration:
     vertical_scale_ratio: float = 0.745
     # Ellipse-center Y offset relative to character center.
     y_offset: float = 0.0
+    # Method 1 (affine): pre-scale cursor Y delta to compensate projection tilt.
+    # Values < 1.0 reduce vertical influence and help angle matching on diagonals.
+    angle_affine_y_scale: float = 0.745
 
     @property
     def ellipse_center_y(self) -> float:
@@ -89,9 +92,12 @@ def map_pointer_to_widget_target(
     if not math.isfinite(calibration.radius) or calibration.radius <= 0:
         return (widget_center_x, widget_center_y)
 
-    # Direction must be measured from character center, not from ellipse center.
+    # Method 1 (affine): remap pointer delta before computing joystick direction.
+    # Keep the anchor point fixed at character center.
     dx = mouse_x - calibration.center_x
     dy = mouse_y - calibration.center_y
+    if math.isfinite(calibration.angle_affine_y_scale) and calibration.angle_affine_y_scale > 0:
+        dy *= calibration.angle_affine_y_scale
     pointer_distance = math.hypot(dx, dy)
     if pointer_distance == 0:
         return (widget_center_x, widget_center_y)
@@ -120,6 +126,8 @@ def clamp_visual_point(
 
     dx = mouse_x - calibration.center_x
     dy = mouse_y - calibration.center_y
+    if math.isfinite(calibration.angle_affine_y_scale) and calibration.angle_affine_y_scale > 0:
+        dy *= calibration.angle_affine_y_scale
     pointer_distance = math.hypot(dx, dy)
     if pointer_distance == 0:
         return None
