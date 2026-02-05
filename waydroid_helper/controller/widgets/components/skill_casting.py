@@ -97,7 +97,6 @@ class SkillCasting(BaseWidget):
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
     VERTICAL_SCALE_RATIO = 0.745
-    ANGLE_AFFINE_Y_SCALE_CONFIG_KEY = "skill_angle_affine_y_scale"
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -606,15 +605,6 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
-        angle_affine_y_scale_config = create_text_config(
-            key=self.ANGLE_AFFINE_Y_SCALE_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Angle Affine Y Scale"),
-            value=str(self.VERTICAL_SCALE_RATIO),
-            description=pgettext(
-                "Controller Widgets",
-                "Affine pre-scale applied to pointer Y delta before angle mapping.",
-            ),
-        )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Apply Anchor Center"),
@@ -634,7 +624,6 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
-        self.add_config_item(angle_affine_y_scale_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -653,9 +642,6 @@ class SkillCasting(BaseWidget):
         )
         self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
-        )
-        self.add_config_change_callback(
-            self.ANGLE_AFFINE_Y_SCALE_CONFIG_KEY, self._on_angle_affine_y_scale_changed
         )
 
         self._sync_center_inputs()
@@ -689,18 +675,6 @@ class SkillCasting(BaseWidget):
         try:
             float(value)
         except (TypeError, ValueError):
-            return
-        self._update_circle_if_selected()
-        self._emit_overlay_event("refresh")
-
-    def _on_angle_affine_y_scale_changed(self, key: str, value: str, restoring: bool) -> None:
-        if restoring:
-            return
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return
-        if parsed <= 0:
             return
         self._update_circle_if_selected()
         self._emit_overlay_event("refresh")
@@ -1359,21 +1333,12 @@ class SkillCasting(BaseWidget):
             y_offset = float(raw_y_offset)
         except (TypeError, ValueError):
             y_offset = 0.0
-        raw_angle_affine_y_scale = self.get_config_value(self.ANGLE_AFFINE_Y_SCALE_CONFIG_KEY)
-        try:
-            angle_affine_y_scale = float(raw_angle_affine_y_scale)
-            if angle_affine_y_scale <= 0:
-                angle_affine_y_scale = self.VERTICAL_SCALE_RATIO
-        except (TypeError, ValueError):
-            angle_affine_y_scale = self.VERTICAL_SCALE_RATIO
-
         return SkillCastingCalibration(
             center_x=center_x,
             center_y=center_y,
             radius=float(outer_radius),
             vertical_scale_ratio=self.VERTICAL_SCALE_RATIO,
             y_offset=y_offset,
-            angle_affine_y_scale=angle_affine_y_scale,
         )
 
     def _map_circle_to_circle(
