@@ -79,6 +79,8 @@ class CircleOverlay(Gtk.DrawingArea):
         # Calculate circle parameters
         if isinstance(center, (list, tuple)) and len(center) == 2:
             center_x, center_y = center
+        elif widget_type == "skill_casting":
+            return
         else:
             center_x = width / 2
             center_y = height / 2
