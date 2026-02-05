@@ -882,7 +882,7 @@ class SkillCasting(BaseWidget):
         )
 
     def get_effective_center(self) -> tuple[float, float]:
-        return self._get_window_center()
+        return self._get_anchor_center()
 
     def get_calibrated_center(self) -> tuple[float, float] | None:
         return self._get_calibrated_center()
@@ -1323,8 +1323,18 @@ class SkillCasting(BaseWidget):
         w, h = self.screen_info.get_host_resolution()
         return w, h
 
+    def _get_anchor_center(self) -> tuple[float, float]:
+        calibrated = self._get_calibrated_center()
+        if calibrated is not None:
+            return calibrated
+        fallback_x, fallback_y = self._get_window_center()
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(fallback_x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(fallback_y))
+        self._sync_center_inputs()
+        return (fallback_x, fallback_y)
+
     def _get_v2_calibration(self) -> SkillCastingCalibration:
-        center_x, center_y = self._get_window_center()
+        center_x, center_y = self._get_anchor_center()
         outer_radius = self.get_config_value("circle_radius")
         if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
             outer_radius = 200
@@ -1345,24 +1355,13 @@ class SkillCasting(BaseWidget):
         self, mouse_x: float, mouse_y: float
     ) -> tuple[float, float]:
         """
-        将鼠标在圆形范围内的坐标映射到虚拟摇杆圆形范围内的坐标
+        将鼠标位置映射到技能释放目标点。
 
-        外圆：窗口中心为圆心，半径按百分比缩放
-        内圆：widget中心为圆心，宽度/2为半径
+        基于锚点中心和椭圆修正参数计算触摸注入目标。
         """
-        widget_center_x = self.center_x
-        widget_center_y = self.center_y
-        widget_radius = self.width / 2
         calibration = self._get_v2_calibration()
 
-        return map_pointer_to_widget_target(
-            mouse_x,
-            mouse_y,
-            calibration,
-            widget_center_x,
-            widget_center_y,
-            widget_radius,
-        )
+        return map_pointer_to_widget_target(mouse_x, mouse_y, calibration)
 
     def _emit_touch_event(
         self, action: AMotionEventAction, position: tuple[float, float] | None = None
