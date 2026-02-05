@@ -19,10 +19,6 @@ class SkillCastingCalibration:
     y_offset: float = 0.0
 
     @property
-    def anchor_center(self) -> tuple[float, float]:
-        return (self.center_x, self.center_y)
-
-    @property
     def math_center_y(self) -> float:
         return self.center_y + self.y_offset
 
@@ -31,15 +27,19 @@ def map_pointer_to_widget_target(
     mouse_x: float,
     mouse_y: float,
     calibration: SkillCastingCalibration,
+    widget_center_x: float,
+    widget_center_y: float,
+    widget_radius: float,
 ) -> tuple[float, float]:
     if not math.isfinite(calibration.radius) or calibration.radius <= 0:
-        return calibration.anchor_center
-
-    if calibration.vertical_scale_ratio == 0:
-        return calibration.anchor_center
+        return (widget_center_x, widget_center_y)
 
     dx = mouse_x - calibration.center_x
     dy = mouse_y - calibration.math_center_y
+
+    if calibration.vertical_scale_ratio == 0:
+        return (widget_center_x, widget_center_y)
+
     dy_corr = dy / calibration.vertical_scale_ratio
     r_corr = math.hypot(dx, dy_corr)
     angle = math.atan2(dy_corr, dx)
@@ -49,18 +49,17 @@ def map_pointer_to_widget_target(
             "SkillCasting v2 mapping: angle=%.4f r_corr=%.2f", angle, r_corr
         )
 
-    if r_corr > calibration.radius and r_corr != 0:
-        unit_x = dx / r_corr
-        unit_y = dy_corr / r_corr
-        dx = unit_x * calibration.radius
-        dy_corr = unit_y * calibration.radius
+    if r_corr == 0:
+        return (widget_center_x, widget_center_y)
 
-    x_vis = calibration.center_x + dx
-    y_vis = calibration.math_center_y + (
-        dy_corr * calibration.vertical_scale_ratio
-    )
+    unit_x = dx / r_corr
+    unit_y = dy_corr / r_corr
+    ratio = min(r_corr / calibration.radius, 1.0)
 
-    return (x_vis, y_vis)
+    target_x = widget_center_x + unit_x * ratio * widget_radius
+    target_y = widget_center_y + unit_y * ratio * widget_radius
+
+    return (target_x, target_y)
 
 
 def clamp_visual_point(
@@ -71,25 +70,25 @@ def clamp_visual_point(
     if not math.isfinite(calibration.radius) or calibration.radius <= 0:
         return None
 
+    dx = mouse_x - calibration.center_x
+    dy = mouse_y - calibration.math_center_y
+
     if calibration.vertical_scale_ratio == 0:
         return None
 
-    dx = mouse_x - calibration.center_x
-    dy = mouse_y - calibration.math_center_y
     dy_corr = dy / calibration.vertical_scale_ratio
     r_corr = math.hypot(dx, dy_corr)
     if r_corr == 0:
-        return (calibration.center_x, calibration.math_center_y)
+        return None
 
-    if r_corr > calibration.radius:
-        unit_x = dx / r_corr
-        unit_y = dy_corr / r_corr
-        dx = unit_x * calibration.radius
-        dy_corr = unit_y * calibration.radius
+    scale = min(calibration.radius / r_corr, 1.0)
+    dx_scaled = dx * scale
+    dy_corr_scaled = dy_corr * scale
 
-    x_vis = calibration.center_x + dx
-    y_vis = calibration.math_center_y + (
-        dy_corr * calibration.vertical_scale_ratio
+    x_vis = calibration.center_x + dx_scaled
+    y_vis = (
+        calibration.math_center_y
+        + (dy_corr_scaled * calibration.vertical_scale_ratio)
     )
 
     return (x_vis, y_vis)
