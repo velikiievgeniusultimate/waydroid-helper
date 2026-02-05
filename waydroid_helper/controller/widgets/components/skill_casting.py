@@ -5,7 +5,9 @@
 """
 
 import asyncio
+import csv
 import math
+import os
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -96,6 +98,13 @@ class SkillCasting(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
+    ENABLE_MAPPING_DEBUG_CONFIG_KEY = "skill_enable_mapping_debug"
+    EXPORT_MAPPING_DEBUG_CONFIG_KEY = "skill_export_mapping_debug"
+    CLEAR_MAPPING_DEBUG_CONFIG_KEY = "skill_clear_mapping_debug"
+    OBSERVED_GAME_ANGLE_CONFIG_KEY = "skill_observed_game_angle"
+    ADD_CALIBRATION_POINT_CONFIG_KEY = "skill_add_calibration_point"
+    EXPORT_CALIBRATION_POINTS_CONFIG_KEY = "skill_export_calibration_points"
+    MAPPING_DEBUG_STATUS_CONFIG_KEY = "skill_mapping_debug_status"
     VERTICAL_SCALE_RATIO = 0.745
 
     # 映射模式固定尺寸
@@ -197,6 +206,10 @@ class SkillCasting(BaseWidget):
         self._calibration_status_label: Gtk.Label | None = None
         self._radius_adjustment: Gtk.Adjustment | None = None
         self._radius_adjustment_updating: bool = False
+        self._mapping_debug_samples: list[dict[str, float]] = []
+        self._mapping_debug_max_samples: int = 5000
+        self._angle_calibration_points: list[dict[str, float]] = []
+        self._angle_calibration_points_max: int = 1000
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
@@ -332,6 +345,9 @@ class SkillCasting(BaseWidget):
 
         self._mouse_x, self._mouse_y = event.data["position"]
         mapped_target = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+        self._record_mapping_debug_sample(
+            self._mouse_x, self._mouse_y, mapped_target[0], mapped_target[1]
+        )
 
         if self._skill_state == SkillState.INACTIVE:
             # 未激活状态下不处理鼠标移动
@@ -381,6 +397,9 @@ class SkillCasting(BaseWidget):
         """激活技能"""
         # 将鼠标位置映射到虚拟摇杆位置
         mapped_target = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+        self._record_mapping_debug_sample(
+            self._mouse_x, self._mouse_y, mapped_target[0], mapped_target[1]
+        )
 
         # 设置目标位置并锁定
         self._target_position = mapped_target
@@ -605,6 +624,69 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
+        enable_mapping_debug_config = create_switch_config(
+            key=self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Enable Mapping Debug"),
+            value=False,
+            description=pgettext(
+                "Controller Widgets",
+                "Collect pointer-to-joystick mapping samples while moving the mouse.",
+            ),
+        )
+        export_mapping_debug_config = create_action_config(
+            key=self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Export Mapping Debug Data"),
+            button_label=pgettext("Controller Widgets", "Export CSV"),
+            description=pgettext(
+                "Controller Widgets",
+                "Export collected mapping samples to a CSV file for offline analysis.",
+            ),
+        )
+        clear_mapping_debug_config = create_action_config(
+            key=self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Clear Mapping Debug Data"),
+            button_label=pgettext("Controller Widgets", "Clear Samples"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear collected mapping samples from memory.",
+            ),
+        )
+        observed_game_angle_config = create_text_config(
+            key=self.OBSERVED_GAME_ANGLE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Observed Game Angle (deg)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets",
+                "Enter the actual in-game skill angle you observed for the current cursor direction.",
+            ),
+        )
+        add_calibration_point_config = create_action_config(
+            key=self.ADD_CALIBRATION_POINT_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Add Calibration Point"),
+            button_label=pgettext("Controller Widgets", "Add Point"),
+            description=pgettext(
+                "Controller Widgets",
+                "Store one pair: mapper angle + observed in-game angle.",
+            ),
+        )
+        export_calibration_points_config = create_action_config(
+            key=self.EXPORT_CALIBRATION_POINTS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Export Calibration Points"),
+            button_label=pgettext("Controller Widgets", "Export Points CSV"),
+            description=pgettext(
+                "Controller Widgets",
+                "Export calibration pairs for offline fitting of angle correction.",
+            ),
+        )
+        mapping_debug_status_config = create_text_config(
+            key=self.MAPPING_DEBUG_STATUS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Mapping Debug Status"),
+            value=pgettext("Controller Widgets", "No calibration points yet."),
+            description=pgettext(
+                "Controller Widgets",
+                "Read-only status for mapping debug actions.",
+            ),
+        )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Apply Anchor Center"),
@@ -624,6 +706,13 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
+        self.add_config_item(enable_mapping_debug_config)
+        self.add_config_item(observed_game_angle_config)
+        self.add_config_item(add_calibration_point_config)
+        self.add_config_item(export_mapping_debug_config)
+        self.add_config_item(export_calibration_points_config)
+        self.add_config_item(clear_mapping_debug_config)
+        self.add_config_item(mapping_debug_status_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -642,6 +731,26 @@ class SkillCasting(BaseWidget):
         )
         self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
+        )
+        self.add_config_change_callback(
+            self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_enable_mapping_debug_changed,
+        )
+        self.add_config_change_callback(
+            self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_export_mapping_debug_clicked,
+        )
+        self.add_config_change_callback(
+            self.ADD_CALIBRATION_POINT_CONFIG_KEY,
+            self._on_add_calibration_point_clicked,
+        )
+        self.add_config_change_callback(
+            self.EXPORT_CALIBRATION_POINTS_CONFIG_KEY,
+            self._on_export_calibration_points_clicked,
+        )
+        self.add_config_change_callback(
+            self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+            self._on_clear_mapping_debug_clicked,
         )
 
         self._sync_center_inputs()
@@ -679,6 +788,237 @@ class SkillCasting(BaseWidget):
         self._update_circle_if_selected()
         self._emit_overlay_event("refresh")
 
+    def _on_enable_mapping_debug_changed(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        if not value:
+            logger.info(
+                "SkillCasting %s mapping debug disabled (samples=%s)",
+                id(self),
+                len(self._mapping_debug_samples),
+            )
+
+    def _on_export_mapping_debug_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        path = self._export_mapping_debug_samples()
+        if path:
+            self._set_mapping_debug_status(
+                pgettext("Controller Widgets", "Mapping samples exported to: {path}").format(
+                    path=path
+                )
+            )
+        else:
+            self._set_mapping_debug_status(
+                pgettext("Controller Widgets", "No mapping samples to export yet.")
+            )
+        self.set_config_value(self.EXPORT_MAPPING_DEBUG_CONFIG_KEY, False)
+
+    def _on_add_calibration_point_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        self._add_calibration_point_from_current_state()
+        self.set_config_value(self.ADD_CALIBRATION_POINT_CONFIG_KEY, False)
+
+    def _on_export_calibration_points_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        path = self._export_calibration_points()
+        if path:
+            self._set_mapping_debug_status(
+                pgettext("Controller Widgets", "Calibration points exported to: {path}").format(
+                    path=path
+                )
+            )
+        else:
+            self._set_mapping_debug_status(
+                pgettext("Controller Widgets", "No calibration points to export yet.")
+            )
+        self.set_config_value(self.EXPORT_CALIBRATION_POINTS_CONFIG_KEY, False)
+
+    def _on_clear_mapping_debug_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring or not value:
+            return
+        self._mapping_debug_samples.clear()
+        self._angle_calibration_points.clear()
+        logger.info("SkillCasting %s mapping debug samples cleared", id(self))
+        self._set_mapping_debug_status(
+            pgettext("Controller Widgets", "Cleared mapping samples and calibration points.")
+        )
+        self.set_config_value(self.CLEAR_MAPPING_DEBUG_CONFIG_KEY, False)
+
+    def _set_mapping_debug_status(self, message: str) -> None:
+        self.set_config_value(self.MAPPING_DEBUG_STATUS_CONFIG_KEY, message)
+
+    @staticmethod
+    def _normalize_angle_deg(angle: float) -> float:
+        normalized = (angle + 180.0) % 360.0 - 180.0
+        if normalized == -180.0:
+            return 180.0
+        return normalized
+
+    @classmethod
+    def _signed_angle_error_deg(cls, observed: float, mapped: float) -> float:
+        return cls._normalize_angle_deg(observed - mapped)
+
+    def _add_calibration_point_from_current_state(self) -> bool:
+        raw_observed = self.get_config_value(self.OBSERVED_GAME_ANGLE_CONFIG_KEY)
+        try:
+            observed_game_angle = float(raw_observed)
+        except (TypeError, ValueError):
+            self._set_mapping_debug_status(
+                pgettext(
+                    "Controller Widgets",
+                    "Enter a valid number in 'Observed Game Angle (deg)' before adding a point.",
+                )
+            )
+            return False
+
+        mapped_x, mapped_y = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+        calibration = self._get_v2_calibration()
+        raw_dx = self._mouse_x - calibration.center_x
+        raw_dy = self._mouse_y - calibration.center_y
+        joystick_dx = mapped_x - self.center_x
+        joystick_dy = mapped_y - self.center_y
+
+        raw_angle_deg = math.degrees(math.atan2(raw_dy, raw_dx))
+        mapper_angle_deg = math.degrees(math.atan2(joystick_dy, joystick_dx))
+        angle_error_deg = self._signed_angle_error_deg(observed_game_angle, mapper_angle_deg)
+
+        point = {
+            "timestamp": time.time(),
+            "mouse_x": self._mouse_x,
+            "mouse_y": self._mouse_y,
+            "raw_angle_deg": raw_angle_deg,
+            "mapper_angle_deg": mapper_angle_deg,
+            "observed_game_angle_deg": observed_game_angle,
+            "angle_error_deg": angle_error_deg,
+            "anchor_center_x": calibration.center_x,
+            "anchor_center_y": calibration.center_y,
+            "ellipse_center_y": calibration.ellipse_center_y,
+            "circle_radius": calibration.radius,
+            "vertical_scale_ratio": calibration.vertical_scale_ratio,
+            "y_offset": calibration.y_offset,
+        }
+        self._angle_calibration_points.append(point)
+        if len(self._angle_calibration_points) > self._angle_calibration_points_max:
+            self._angle_calibration_points.pop(0)
+
+        self._set_mapping_debug_status(
+            pgettext(
+                "Controller Widgets",
+                "Added point #{count}: mapper={mapper:.2f}°, observed={observed:.2f}°, error={error:+.2f}°",
+            ).format(
+                count=len(self._angle_calibration_points),
+                mapper=mapper_angle_deg,
+                observed=observed_game_angle,
+                error=angle_error_deg,
+            )
+        )
+        return True
+
+    def _is_mapping_debug_enabled(self) -> bool:
+        return bool(self.get_config_value(self.ENABLE_MAPPING_DEBUG_CONFIG_KEY))
+
+    def _record_mapping_debug_sample(
+        self,
+        mouse_x: float,
+        mouse_y: float,
+        mapped_x: float,
+        mapped_y: float,
+    ) -> None:
+        if not self._is_mapping_debug_enabled():
+            return
+
+        calibration = self._get_v2_calibration()
+        raw_dx = mouse_x - calibration.center_x
+        raw_dy = mouse_y - calibration.center_y
+        joystick_dx = mapped_x - self.center_x
+        joystick_dy = mapped_y - self.center_y
+        sample = {
+            "timestamp": time.time(),
+            "state": self._skill_state.value,
+            "mouse_x": mouse_x,
+            "mouse_y": mouse_y,
+            "anchor_center_x": calibration.center_x,
+            "anchor_center_y": calibration.center_y,
+            "ellipse_center_y": calibration.ellipse_center_y,
+            "raw_dx": raw_dx,
+            "raw_dy": raw_dy,
+            "raw_angle_deg": math.degrees(math.atan2(raw_dy, raw_dx)),
+            "mapped_x": mapped_x,
+            "mapped_y": mapped_y,
+            "joystick_center_x": self.center_x,
+            "joystick_center_y": self.center_y,
+            "joystick_dx": joystick_dx,
+            "joystick_dy": joystick_dy,
+            "joystick_angle_deg": math.degrees(math.atan2(joystick_dy, joystick_dx)),
+            "circle_radius": calibration.radius,
+            "vertical_scale_ratio": calibration.vertical_scale_ratio,
+            "y_offset": calibration.y_offset,
+        }
+        self._mapping_debug_samples.append(sample)
+        if len(self._mapping_debug_samples) > self._mapping_debug_max_samples:
+            self._mapping_debug_samples.pop(0)
+
+    def _export_mapping_debug_samples(self) -> str | None:
+        if not self._mapping_debug_samples:
+            logger.info("SkillCasting %s no mapping samples to export", id(self))
+            return None
+
+        data_dir = os.path.join(os.path.expanduser("~"), ".local", "share", "waydroid-helper")
+        os.makedirs(data_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(data_dir, f"skill-casting-mapping-debug-{timestamp}.csv")
+
+        fieldnames = list(self._mapping_debug_samples[0].keys())
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._mapping_debug_samples)
+
+        logger.info(
+            "SkillCasting %s exported %s mapping samples to %s",
+            id(self),
+            len(self._mapping_debug_samples),
+            path,
+        )
+        return path
+
+    def _export_calibration_points(self) -> str | None:
+        if not self._angle_calibration_points:
+            logger.info("SkillCasting %s no calibration points to export", id(self))
+            return None
+
+        data_dir = os.path.join(os.path.expanduser("~"), ".local", "share", "waydroid-helper")
+        os.makedirs(data_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(data_dir, f"skill-casting-angle-calibration-{timestamp}.csv")
+
+        fieldnames = list(self._angle_calibration_points[0].keys())
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._angle_calibration_points)
+
+        logger.info(
+            "SkillCasting %s exported %s calibration points to %s",
+            id(self),
+            len(self._angle_calibration_points),
+            path,
+        )
+        return path
+
     def _on_cast_timing_changed(self, key: str, value: str, restoring:bool) -> None:
         """处理施法时机配置变更"""
         try:
@@ -710,7 +1050,7 @@ class SkillCasting(BaseWidget):
         intro = Gtk.Label(
             label=pgettext(
                 "Controller Widgets",
-                "Configure casting behavior and affine calibration.",
+                "Configure casting behavior and anchor calibration.",
             ),
             xalign=0,
         )
@@ -791,6 +1131,26 @@ class SkillCasting(BaseWidget):
                 ),
                 expanded=True,
                 extra_widgets=[status_label],
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Mapping Debug"),
+                [
+                    self.ENABLE_MAPPING_DEBUG_CONFIG_KEY,
+                    self.OBSERVED_GAME_ANGLE_CONFIG_KEY,
+                    self.ADD_CALIBRATION_POINT_CONFIG_KEY,
+                    self.EXPORT_MAPPING_DEBUG_CONFIG_KEY,
+                    self.EXPORT_CALIBRATION_POINTS_CONFIG_KEY,
+                    self.CLEAR_MAPPING_DEBUG_CONFIG_KEY,
+                    self.MAPPING_DEBUG_STATUS_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Collect mapper samples, then add observed in-game angle points to measure real angle error.",
+                ),
+                expanded=False,
             )
         )
 
