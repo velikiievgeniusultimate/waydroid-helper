@@ -1345,13 +1345,24 @@ class SkillCasting(BaseWidget):
         self, mouse_x: float, mouse_y: float
     ) -> tuple[float, float]:
         """
-        将鼠标位置映射到技能释放目标点。
+        将鼠标在圆形范围内的坐标映射到虚拟摇杆圆形范围内的坐标
 
-        基于锚点中心和椭圆修正参数计算触摸注入目标。
+        外圆：窗口中心为圆心，半径按百分比缩放
+        内圆：widget中心为圆心，宽度/2为半径
         """
+        widget_center_x = self.center_x
+        widget_center_y = self.center_y
+        widget_radius = self.width / 2
         calibration = self._get_v2_calibration()
 
-        return map_pointer_to_widget_target(mouse_x, mouse_y, calibration)
+        return map_pointer_to_widget_target(
+            mouse_x,
+            mouse_y,
+            calibration,
+            widget_center_x,
+            widget_center_y,
+            widget_radius,
+        )
 
     def _emit_touch_event(
         self, action: AMotionEventAction, position: tuple[float, float] | None = None
