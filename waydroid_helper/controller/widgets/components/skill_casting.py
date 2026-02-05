@@ -16,7 +16,7 @@ from waydroid_helper.controller.widgets.components.cancel_casting import \
     CancelCasting
 from waydroid_helper.controller.widgets.components.skill_casting_v2 import (
     SkillCastingCalibration,
-    map_pointer_to_anchor_target,
+    map_pointer_to_widget_target,
 )
 from waydroid_helper.util.log import logger
 
@@ -90,8 +90,12 @@ class SkillCasting(BaseWidget):
     )
     CENTER_X_CONFIG_KEY = "skill_calibrated_center_x"
     CENTER_Y_CONFIG_KEY = "skill_calibrated_center_y"
+    CENTER_X_INPUT_CONFIG_KEY = "skill_center_x_input"
+    CENTER_Y_INPUT_CONFIG_KEY = "skill_center_y_input"
     Y_OFFSET_CONFIG_KEY = "skill_ellipse_y_offset"
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
+    RESET_CENTER_CONFIG_KEY = "skill_reset_center"
+    APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
     VERTICAL_SCALE_RATIO = 0.745
 
     # 映射模式固定尺寸
@@ -543,22 +547,49 @@ class SkillCasting(BaseWidget):
         calibrate_center_config = create_action_config(
             key=self.CALIBRATE_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Calibrate Anchor Center"),
-            button_label=pgettext("Controller Widgets", "Calibrate Anchor"),
+            button_label=pgettext("Controller Widgets", "Calibrate"),
             description=pgettext(
                 "Controller Widgets",
                 "Click to enter calibration mode, then click the anchor center on screen.",
             ),
         )
+        reset_center_config = create_action_config(
+            key=self.RESET_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Reset Anchor Center"),
+            button_label=pgettext("Controller Widgets", "Reset"),
+            description=pgettext(
+                "Controller Widgets",
+                "Clear the calibrated anchor center and return to the screen center.",
+            ),
+        )
         center_x_config = create_text_config(
             key=self.CENTER_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Anchor Center X"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored anchor center X coordinate."
+            ),
+            visible=False,
+        )
+        center_y_config = create_text_config(
+            key=self.CENTER_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Anchor Center Y"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Stored anchor center Y coordinate."
+            ),
+            visible=False,
+        )
+        center_x_input_config = create_text_config(
+            key=self.CENTER_X_INPUT_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Anchor Center X (px)"),
             value="",
             description=pgettext(
                 "Controller Widgets", "Manual anchor center X coordinate in pixels."
             ),
         )
-        center_y_config = create_text_config(
-            key=self.CENTER_Y_CONFIG_KEY,
+        center_y_input_config = create_text_config(
+            key=self.CENTER_Y_INPUT_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Anchor Center Y (px)"),
             value="",
             description=pgettext(
@@ -574,14 +605,26 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
+        apply_center_config = create_action_config(
+            key=self.APPLY_CENTER_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Apply Anchor Center"),
+            button_label=pgettext("Controller Widgets", "Apply"),
+            description=pgettext(
+                "Controller Widgets", "Apply the manual anchor center coordinates."
+            ),
+        )
 
         self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
         self.add_config_item(self.cancel_button_config)
         self.add_config_item(calibrate_center_config)
+        self.add_config_item(reset_center_config)
         self.add_config_item(center_x_config)
         self.add_config_item(center_y_config)
+        self.add_config_item(center_x_input_config)
+        self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
+        self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
@@ -592,18 +635,20 @@ class SkillCasting(BaseWidget):
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
         )
         self.add_config_change_callback(
+            self.RESET_CENTER_CONFIG_KEY, self._on_reset_center_clicked
+        )
+        self.add_config_change_callback(
+            self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
+        )
+        self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
         )
-        self.add_config_change_callback(
-            self.CENTER_X_CONFIG_KEY, self._on_anchor_center_changed
-        )
-        self.add_config_change_callback(
-            self.CENTER_Y_CONFIG_KEY, self._on_anchor_center_changed
-        )
 
+        self._sync_center_inputs()
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
+                self._sync_center_inputs(),
                 self._update_circle_if_selected(),
                 self._emit_overlay_event("refresh"),
             ),
@@ -626,20 +671,6 @@ class SkillCasting(BaseWidget):
 
     def _on_y_offset_changed(self, key: str, value: str, restoring: bool) -> None:
         if restoring:
-            return
-        try:
-            float(value)
-        except (TypeError, ValueError):
-            return
-        self._update_circle_if_selected()
-        self._emit_overlay_event("refresh")
-
-    def _on_anchor_center_changed(self, key: str, value: str, restoring: bool) -> None:
-        if restoring:
-            return
-        if value in ("", None):
-            self._update_circle_if_selected()
-            self._emit_overlay_event("refresh")
             return
         try:
             float(value)
@@ -748,9 +779,11 @@ class SkillCasting(BaseWidget):
                 pgettext("Controller Widgets", "Anchor Calibration"),
                 [
                     self.CALIBRATE_CENTER_CONFIG_KEY,
-                    self.CENTER_X_CONFIG_KEY,
-                    self.CENTER_Y_CONFIG_KEY,
+                    self.RESET_CENTER_CONFIG_KEY,
+                    self.CENTER_X_INPUT_CONFIG_KEY,
+                    self.CENTER_Y_INPUT_CONFIG_KEY,
                     self.Y_OFFSET_CONFIG_KEY,
+                    self.APPLY_CENTER_CONFIG_KEY,
                 ],
                 description=pgettext(
                     "Controller Widgets",
@@ -770,6 +803,37 @@ class SkillCasting(BaseWidget):
             return
         self._set_calibration_mode(not self._center_calibration_active)
 
+    def _on_reset_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        self._set_calibration_mode(False)
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
+        self._sync_center_inputs()
+        self._emit_overlay_event("refresh")
+
+    def _on_apply_center_clicked(
+        self, key: str, value: bool, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        raw_x = self.get_config_value(self.CENTER_X_INPUT_CONFIG_KEY)
+        raw_y = self.get_config_value(self.CENTER_Y_INPUT_CONFIG_KEY)
+        try:
+            x = float(raw_x)
+            y = float(raw_y)
+        except (TypeError, ValueError):
+            return
+        w, h = self._get_window_size()
+        if not (0 <= x < w and 0 <= y < h):
+            return
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._emit_overlay_event("refresh")
+
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
         data = event.data or {}
         x = data.get("x")
@@ -778,7 +842,7 @@ class SkillCasting(BaseWidget):
             return
         self._apply_calibration_click(float(x), float(y))
 
-    def _get_anchor_center(self) -> tuple[float, float] | None:
+    def _get_calibrated_center(self) -> tuple[float, float] | None:
         raw_x = self.get_config_value(self.CENTER_X_CONFIG_KEY)
         raw_y = self.get_config_value(self.CENTER_Y_CONFIG_KEY)
         if raw_x in (None, "") or raw_y in (None, ""):
@@ -792,6 +856,15 @@ class SkillCasting(BaseWidget):
         if not (0 <= x < w and 0 <= y < h):
             return None
         return (x, y)
+
+    def _sync_center_inputs(self) -> None:
+        calibrated = self._get_calibrated_center()
+        if calibrated is None:
+            self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, "")
+            self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, "")
+            return
+        self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(int(calibrated[0])))
+        self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
 
     def _set_calibration_mode(self, active: bool) -> None:
         self._center_calibration_active = active
@@ -809,13 +882,10 @@ class SkillCasting(BaseWidget):
         )
 
     def get_effective_center(self) -> tuple[float, float]:
-        anchor = self._get_anchor_center()
-        if anchor is None:
-            return (0.0, 0.0)
-        return anchor
+        return self._get_window_center()
 
     def get_calibrated_center(self) -> tuple[float, float] | None:
-        return self._get_anchor_center()
+        return self._get_calibrated_center()
 
     @property
     def is_calibrating(self) -> bool:
@@ -847,6 +917,7 @@ class SkillCasting(BaseWidget):
             return False
         self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
         self._set_calibration_mode(False)
         self._emit_overlay_event("refresh")
         return True
@@ -862,7 +933,7 @@ class SkillCasting(BaseWidget):
         label = (
             pgettext("Controller Widgets", "Cancel")
             if self._center_calibration_active
-            else pgettext("Controller Widgets", "Calibrate Anchor")
+            else pgettext("Controller Widgets", "Calibrate")
         )
         button.set_label(label)
 
@@ -873,7 +944,7 @@ class SkillCasting(BaseWidget):
             self._calibration_status_label.set_label(
                 pgettext(
                     "Controller Widgets",
-                    "Click to set anchor center…",
+                    "Click on the screen to set the anchor center, or press Esc to cancel.",
                 )
             )
         else:
@@ -985,8 +1056,8 @@ class SkillCasting(BaseWidget):
 
     def _update_circle_if_selected(self):
         """如果当前组件被选中，更新圆形绘制"""
-        calibration = self._get_v2_calibration()
-        if self.is_selected and not self.mapping_mode and calibration is not None:
+        if self.is_selected and not self.mapping_mode:
+            calibration = self._get_v2_calibration()
             circle_data = {
                 "widget_id": id(self),
                 "widget_type": "skill_casting",
@@ -1019,6 +1090,42 @@ class SkillCasting(BaseWidget):
         # 绘制圆形背景
         cr.set_source_rgba(0.5, 0.5, 0.5, 0.6)
         cr.arc(center_x, center_y, radius, 0, 2 * math.pi)
+        cr.fill()
+
+        # 绘制雷达扫描效果
+        # 绘制同心圆（类似雷达的圆圈）- 从内向外颜色加深
+        # 内圆 - 最浅灰色 (133/400 = 0.33)
+        inner_radius = radius * 0.33
+        cr.set_source_rgba(0.8, 0.8, 0.8, 0.8)  # 最浅灰色
+        cr.arc(center_x, center_y, inner_radius, 0, 2 * math.pi)
+        cr.fill()
+
+        # 中圆 - 中等灰色 (266/400 = 0.66)
+        middle_radius = radius * 0.66
+        cr.set_source_rgba(0.6, 0.6, 0.6, 0.8)  # 中等灰色
+        cr.arc(center_x, center_y, middle_radius, 0, 2 * math.pi)
+        cr.fill()
+
+        # 外圆已经是原本的圆形背景(0.5, 0.5, 0.5, 0.6)，是最深的，保持不变
+
+        # 绘制135度扇形朝上 - 透明度高
+        cr.set_source_rgba(64 / 255, 224 / 255, 208 / 255, 0.25)  # 青绿色，透明度0.25
+        cr.move_to(center_x, center_y)
+        # 135度扇形，以向上(-π/2)为中心，向两边扩展67.5度
+        start_angle_135 = -math.pi / 2 - 135 * math.pi / 360  # 向上中心-67.5度
+        end_angle_135 = -math.pi / 2 + 135 * math.pi / 360  # 向上中心+67.5度
+        cr.arc(center_x, center_y, radius, start_angle_135, end_angle_135)
+        cr.close_path()
+        cr.fill()
+
+        # 绘制45度扇形朝上 - 透明度低
+        cr.set_source_rgba(64 / 255, 224 / 255, 208 / 255, 0.15)  # 青绿色，透明度0.15
+        cr.move_to(center_x, center_y)
+        # 45度扇形，以向上(-π/2)为中心，向两边扩展22.5度
+        start_angle_45 = -math.pi / 2 - 45 * math.pi / 360  # 向上中心-22.5度
+        end_angle_45 = -math.pi / 2 + 45 * math.pi / 360  # 向上中心+22.5度
+        cr.arc(center_x, center_y, radius, start_angle_45, end_angle_45)
+        cr.close_path()
         cr.fill()
 
         # 绘制圆形边框
@@ -1203,16 +1310,21 @@ class SkillCasting(BaseWidget):
             # 清除路径，避免影响后续绘制
             cr.new_path()
 
+    def _get_window_center(self) -> tuple[float, float]:
+        """获取窗口中心坐标"""
+        calibrated = self._get_calibrated_center()
+        if calibrated is not None:
+            return calibrated
+        w, h = self.screen_info.get_host_resolution()
+        return (w / 2, h / 2)
+
     def _get_window_size(self) -> tuple[int, int]:
         """获取窗口大小"""
         w, h = self.screen_info.get_host_resolution()
         return w, h
 
-    def _get_v2_calibration(self) -> SkillCastingCalibration | None:
-        anchor_center = self._get_anchor_center()
-        if anchor_center is None:
-            return None
-        center_x, center_y = anchor_center
+    def _get_v2_calibration(self) -> SkillCastingCalibration:
+        center_x, center_y = self._get_window_center()
         outer_radius = self.get_config_value("circle_radius")
         if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
             outer_radius = 200
@@ -1233,13 +1345,24 @@ class SkillCasting(BaseWidget):
         self, mouse_x: float, mouse_y: float
     ) -> tuple[float, float]:
         """
-        将鼠标坐标映射到技能释放目标点（基于锚点中心的椭圆范围）
-        """
-        calibration = self._get_v2_calibration()
-        if calibration is None:
-            return self._current_position
+        将鼠标在圆形范围内的坐标映射到虚拟摇杆圆形范围内的坐标
 
-        return map_pointer_to_anchor_target(mouse_x, mouse_y, calibration)
+        外圆：窗口中心为圆心，半径按百分比缩放
+        内圆：widget中心为圆心，宽度/2为半径
+        """
+        widget_center_x = self.center_x
+        widget_center_y = self.center_y
+        widget_radius = self.width / 2
+        calibration = self._get_v2_calibration()
+
+        return map_pointer_to_widget_target(
+            mouse_x,
+            mouse_y,
+            calibration,
+            widget_center_x,
+            widget_center_y,
+            widget_radius,
+        )
 
     def _emit_touch_event(
         self, action: AMotionEventAction, position: tuple[float, float] | None = None
