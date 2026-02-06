@@ -93,6 +93,7 @@ class SkillCasting(BaseWidget):
     CENTER_X_INPUT_CONFIG_KEY = "skill_center_x_input"
     CENTER_Y_INPUT_CONFIG_KEY = "skill_center_y_input"
     Y_OFFSET_CONFIG_KEY = "skill_ellipse_y_offset"
+    Y_AXIS_RATIO_CONFIG_KEY = "skill_y_axis_ratio"
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
@@ -605,6 +606,15 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
+        y_axis_ratio_config = create_text_config(
+            key=self.Y_AXIS_RATIO_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "YAxis Ratio"),
+            value=str(self.VERTICAL_SCALE_RATIO),
+            description=pgettext(
+                "Controller Widgets",
+                "Perspective correction for vertical aiming (e.g., 2.0 matches BlueStacks-style calibration).",
+            ),
+        )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Apply Anchor Center"),
@@ -624,6 +634,7 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
+        self.add_config_item(y_axis_ratio_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -642,6 +653,9 @@ class SkillCasting(BaseWidget):
         )
         self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
+        )
+        self.add_config_change_callback(
+            self.Y_AXIS_RATIO_CONFIG_KEY, self._on_y_axis_ratio_changed
         )
 
         self._sync_center_inputs()
@@ -670,6 +684,16 @@ class SkillCasting(BaseWidget):
             pass
 
     def _on_y_offset_changed(self, key: str, value: str, restoring: bool) -> None:
+        if restoring:
+            return
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return
+        self._update_circle_if_selected()
+        self._emit_overlay_event("refresh")
+
+    def _on_y_axis_ratio_changed(self, key: str, value: str, restoring: bool) -> None:
         if restoring:
             return
         try:
@@ -783,6 +807,7 @@ class SkillCasting(BaseWidget):
                     self.CENTER_X_INPUT_CONFIG_KEY,
                     self.CENTER_Y_INPUT_CONFIG_KEY,
                     self.Y_OFFSET_CONFIG_KEY,
+                    self.Y_AXIS_RATIO_CONFIG_KEY,
                     self.APPLY_CENTER_CONFIG_KEY,
                 ],
                 description=pgettext(
@@ -1333,11 +1358,18 @@ class SkillCasting(BaseWidget):
             y_offset = float(raw_y_offset)
         except (TypeError, ValueError):
             y_offset = 0.0
+        raw_y_axis_ratio = self.get_config_value(self.Y_AXIS_RATIO_CONFIG_KEY)
+        try:
+            y_axis_ratio = float(raw_y_axis_ratio)
+        except (TypeError, ValueError):
+            y_axis_ratio = self.VERTICAL_SCALE_RATIO
+        if not math.isfinite(y_axis_ratio) or y_axis_ratio <= 0:
+            y_axis_ratio = self.VERTICAL_SCALE_RATIO
         return SkillCastingCalibration(
             center_x=center_x,
             center_y=center_y,
             radius=float(outer_radius),
-            vertical_scale_ratio=self.VERTICAL_SCALE_RATIO,
+            vertical_scale_ratio=y_axis_ratio,
             y_offset=y_offset,
         )
 
