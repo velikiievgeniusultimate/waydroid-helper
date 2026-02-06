@@ -90,12 +90,25 @@ class CircleOverlay(Gtk.DrawingArea):
             cr.stroke()
             return
 
+        ellipse_radius_x = self.circle_data.get("ellipse_radius_x")
+        ellipse_radius_y = self.circle_data.get("ellipse_radius_y")
+        ellipse_center = self.circle_data.get("ellipse_center")
         vertical_scale_ratio = self.circle_data.get("vertical_scale_ratio", 1.0)
         y_offset = self.circle_data.get("y_offset", 0.0)
-        math_center_y = center_y + y_offset
+
+        if isinstance(ellipse_center, (list, tuple)) and len(ellipse_center) == 2:
+            math_center_x, math_center_y = ellipse_center
+        else:
+            math_center_x = center_x
+            math_center_y = center_y + y_offset
+
+        if not isinstance(ellipse_radius_x, (int, float)):
+            ellipse_radius_x = circle_radius
+        if not isinstance(ellipse_radius_y, (int, float)):
+            ellipse_radius_y = circle_radius * vertical_scale_ratio
 
         # Ellipse boundary (math center + vertical scale)
-        if vertical_scale_ratio != 0:
+        if ellipse_radius_x and ellipse_radius_y:
             samples = 128
             cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
             cr.set_line_width(2)
@@ -103,8 +116,8 @@ class CircleOverlay(Gtk.DrawingArea):
                 t = 2 * math.pi * idx / samples
                 unit_x = math.cos(t)
                 unit_y = math.sin(t)
-                x = center_x + unit_x * circle_radius
-                y = math_center_y + unit_y * circle_radius * vertical_scale_ratio
+                x = math_center_x + unit_x * ellipse_radius_x
+                y = math_center_y + unit_y * ellipse_radius_y
                 if idx == 0:
                     cr.move_to(x, y)
                 else:
