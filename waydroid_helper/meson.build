@@ -194,6 +194,7 @@ controller_widgets_components_sources = [
     'controller/widgets/components/right_click_to_walk.py',
     'controller/widgets/components/skill_casting.py',
     'controller/widgets/components/skill_casting_v2.py',
+    'controller/widgets/components/skill_casting_perspective.py',
     'controller/widgets/components/cancel_casting.py',
     'controller/widgets/components/repeated_click.py',
 ]
