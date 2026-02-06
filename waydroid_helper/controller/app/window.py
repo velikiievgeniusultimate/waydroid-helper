@@ -94,40 +94,8 @@ class CircleOverlay(Gtk.DrawingArea):
         y_offset = self.circle_data.get("y_offset", 0.0)
         math_center_y = center_y + y_offset
 
-        ellipse_radius_x = self.circle_data.get("ellipse_radius_x")
-        ellipse_radius_y = self.circle_data.get("ellipse_radius_y")
-        ellipse_dx_bias = self.circle_data.get("ellipse_dx_bias", 0.0)
-        ellipse_dy_bias = self.circle_data.get("ellipse_dy_bias", 0.0)
-        ellipse_center = self.circle_data.get("ellipse_center")
-        if isinstance(ellipse_center, (list, tuple)) and len(ellipse_center) == 2:
-            ellipse_center_x, ellipse_center_y = ellipse_center
-        else:
-            ellipse_center_x = center_x + ellipse_dx_bias
-            ellipse_center_y = center_y + ellipse_dy_bias
-
-        # Ellipse boundary (math center + vertical scale or explicit radii)
-        if (
-            isinstance(ellipse_radius_x, (int, float))
-            and isinstance(ellipse_radius_y, (int, float))
-            and ellipse_radius_x > 0
-            and ellipse_radius_y > 0
-        ):
-            samples = 128
-            cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
-            cr.set_line_width(2)
-            for idx in range(samples + 1):
-                t = 2 * math.pi * idx / samples
-                unit_x = math.cos(t)
-                unit_y = math.sin(t)
-                x = ellipse_center_x + unit_x * ellipse_radius_x
-                y = ellipse_center_y + unit_y * ellipse_radius_y
-                if idx == 0:
-                    cr.move_to(x, y)
-                else:
-                    cr.line_to(x, y)
-            cr.close_path()
-            cr.stroke()
-        elif vertical_scale_ratio != 0:
+        # Ellipse boundary (math center + vertical scale)
+        if vertical_scale_ratio != 0:
             samples = 128
             cr.set_source_rgba(0.2, 0.7, 1.0, 0.65)
             cr.set_line_width(2)
@@ -153,21 +121,6 @@ class CircleOverlay(Gtk.DrawingArea):
         cr.move_to(center_x, center_y - crosshair_size)
         cr.line_to(center_x, center_y + crosshair_size)
         cr.stroke()
-
-        if (
-            isinstance(ellipse_radius_x, (int, float))
-            and isinstance(ellipse_radius_y, (int, float))
-            and ellipse_radius_x > 0
-            and ellipse_radius_y > 0
-        ):
-            crosshair_size = 6
-            cr.set_source_rgba(1.0, 0.6, 0.2, 0.9)
-            cr.set_line_width(2)
-            cr.move_to(ellipse_center_x - crosshair_size, ellipse_center_y)
-            cr.line_to(ellipse_center_x + crosshair_size, ellipse_center_y)
-            cr.move_to(ellipse_center_x, ellipse_center_y - crosshair_size)
-            cr.line_to(ellipse_center_x, ellipse_center_y + crosshair_size)
-            cr.stroke()
 
 
 class RightClickToWalkOverlay(Gtk.DrawingArea):
