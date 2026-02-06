@@ -2,14 +2,12 @@
 """Skill Casting geometry helpers.
 
 The in-game skill range is rendered as an ellipse on screen, while the joystick
-widget itself remains a perfect circle.  The mapper below keeps these two spaces
-in sync by:
+widget itself remains a perfect circle.  Two models are supported:
 
-1) Treating ``center_x/center_y`` as the *character* anchor center.
-2) Treating ``y_offset`` as the vertical shift from character center to the
-   ellipse center.
-3) Projecting the cursor direction from the character center onto the ellipse
-   border, then normalizing into the joystick circle.
+1) A legacy ray-ellipse mapper that projects from the character anchor to the
+   ellipse border.
+2) A perspective ellipse model that normalizes screen points into a unit circle
+   space so angles remain stable under camera tilt.
 """
 
 from __future__ import annotations
@@ -39,6 +37,81 @@ class SkillCastingCalibration:
     @property
     def ellipse_vertical_radius(self) -> float:
         return self.radius * self.vertical_scale_ratio
+
+
+@dataclass(frozen=True)
+class PerspectiveEllipseModel:
+    """Projective-like correction model for skill casting."""
+
+    center_x: float
+    center_y: float
+    radius_x: float
+    radius_y: float
+    dx_bias: float = 0.0
+    dy_bias: float = 0.0
+
+    @classmethod
+    def from_cardinals(
+        cls,
+        center: tuple[float, float],
+        north: tuple[float, float],
+        south: tuple[float, float],
+        west: tuple[float, float],
+        east: tuple[float, float],
+    ) -> "PerspectiveEllipseModel":
+        cx, cy = center
+        nx, ny = north
+        sx, sy = south
+        wx, _wy = west
+        ex, _ey = east
+
+        radius_x = (ex - wx) / 2.0
+        radius_y = (sy - ny) / 2.0
+        dx_bias = ((ex + wx) / 2.0) - cx
+        dy_bias = ((sy + ny) / 2.0) - cy
+        return cls(
+            center_x=cx,
+            center_y=cy,
+            radius_x=radius_x,
+            radius_y=radius_y,
+            dx_bias=dx_bias,
+            dy_bias=dy_bias,
+        )
+
+    @property
+    def corrected_center(self) -> tuple[float, float]:
+        return (self.center_x + self.dx_bias, self.center_y + self.dy_bias)
+
+    def normalize_point(
+        self, px: float, py: float
+    ) -> tuple[float, float, float, float] | None:
+        if self.radius_x <= 0 or self.radius_y <= 0:
+            return None
+        ccx, ccy = self.corrected_center
+        u = (px - ccx) / self.radius_x
+        v = (py - ccy) / self.radius_y
+        raw_radius = math.hypot(u, v)
+        raw_angle = math.atan2(v, u)
+        return (u, v, raw_radius, raw_angle)
+
+    def point_to_angle_distance(
+        self, px: float, py: float
+    ) -> tuple[float, float] | None:
+        normalized = self.normalize_point(px, py)
+        if normalized is None:
+            return None
+        _u, _v, raw_radius, raw_angle = normalized
+        return (raw_angle, raw_radius)
+
+    def angle_distance_to_point(
+        self, angle_rad: float, distance_norm: float
+    ) -> tuple[float, float] | None:
+        if self.radius_x <= 0 or self.radius_y <= 0:
+            return None
+        ccx, ccy = self.corrected_center
+        x = ccx + self.radius_x * distance_norm * math.cos(angle_rad)
+        y = ccy + self.radius_y * distance_norm * math.sin(angle_rad)
+        return (x, y)
 
 
 def _ray_ellipse_intersection_distance(

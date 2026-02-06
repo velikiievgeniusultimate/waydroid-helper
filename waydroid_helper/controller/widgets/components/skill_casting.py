@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 from waydroid_helper.controller.widgets.components.cancel_casting import \
     CancelCasting
 from waydroid_helper.controller.widgets.components.skill_casting_v2 import (
+    PerspectiveEllipseModel,
     SkillCastingCalibration,
     map_pointer_to_widget_target,
 )
@@ -96,7 +97,45 @@ class SkillCasting(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
+    ENABLE_PERSPECTIVE_CONFIG_KEY = "skill_enable_perspective_correction"
+    RADIUS_X_CONFIG_KEY = "skill_perspective_radius_x"
+    RADIUS_Y_CONFIG_KEY = "skill_perspective_radius_y"
+    DX_BIAS_CONFIG_KEY = "skill_perspective_dx_bias"
+    DY_BIAS_CONFIG_KEY = "skill_perspective_dy_bias"
+    DEADZONE_CONFIG_KEY = "skill_perspective_deadzone"
+    MAX_RADIUS_CLAMP_CONFIG_KEY = "skill_perspective_max_radius"
+    DISTANCE_CURVE_MODE_CONFIG_KEY = "skill_perspective_distance_curve"
+    GAMMA_CONFIG_KEY = "skill_perspective_gamma"
+    ANGLE_BIAS_CONFIG_KEY = "skill_perspective_angle_bias_deg"
+    RADIUS_SCALE_CONFIG_KEY = "skill_perspective_radius_scale"
+    WARN_THRESHOLD_CONFIG_KEY = "skill_perspective_warn_threshold"
+    NORTH_X_CONFIG_KEY = "skill_perspective_north_x"
+    NORTH_Y_CONFIG_KEY = "skill_perspective_north_y"
+    SOUTH_X_CONFIG_KEY = "skill_perspective_south_x"
+    SOUTH_Y_CONFIG_KEY = "skill_perspective_south_y"
+    WEST_X_CONFIG_KEY = "skill_perspective_west_x"
+    WEST_Y_CONFIG_KEY = "skill_perspective_west_y"
+    EAST_X_CONFIG_KEY = "skill_perspective_east_x"
+    EAST_Y_CONFIG_KEY = "skill_perspective_east_y"
+    NE_X_CONFIG_KEY = "skill_perspective_ne_x"
+    NE_Y_CONFIG_KEY = "skill_perspective_ne_y"
+    NW_X_CONFIG_KEY = "skill_perspective_nw_x"
+    NW_Y_CONFIG_KEY = "skill_perspective_nw_y"
+    SE_X_CONFIG_KEY = "skill_perspective_se_x"
+    SE_Y_CONFIG_KEY = "skill_perspective_se_y"
+    SW_X_CONFIG_KEY = "skill_perspective_sw_x"
+    SW_Y_CONFIG_KEY = "skill_perspective_sw_y"
     VERTICAL_SCALE_RATIO = 0.745
+    DEFAULT_RADIUS = 200.0
+    DEFAULT_MAX_RADIUS_CLAMP = 1.0
+    DEFAULT_DEADZONE = 0.0
+    DEFAULT_GAMMA = 1.0
+    DEFAULT_ANGLE_BIAS_DEG = 0.0
+    DEFAULT_RADIUS_SCALE = 1.0
+    DEFAULT_WARN_THRESHOLD = 5.0
+    DISTANCE_CURVE_LINEAR = "linear"
+    DISTANCE_CURVE_GAMMA = "gamma"
+    DISTANCE_CURVE_SMOOTHSTEP = "smoothstep"
 
     # 映射模式固定尺寸
     MAPPING_MODE_HEIGHT = 30
@@ -197,6 +236,7 @@ class SkillCasting(BaseWidget):
         self._calibration_status_label: Gtk.Label | None = None
         self._radius_adjustment: Gtk.Adjustment | None = None
         self._radius_adjustment_updating: bool = False
+        self._perspective_debug_labels: dict[str, Gtk.Label] = {}
 
         # 施法时机配置
         # self.cast_timing: str = CastTiming.ON_RELEASE.value  # 默认为松开释放
@@ -605,6 +645,284 @@ class SkillCasting(BaseWidget):
                 "Offset applied to the ellipse center relative to the anchor center.",
             ),
         )
+        enable_perspective_config = create_switch_config(
+            key=self.ENABLE_PERSPECTIVE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Enable Perspective Correction"),
+            value=False,
+            description=pgettext(
+                "Controller Widgets",
+                "Use ellipse normalization to stabilize angle and distance under perspective.",
+            ),
+        )
+        radius_x_config = create_slider_config(
+            key=self.RADIUS_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ellipse Radius X (px)"),
+            value=self.DEFAULT_RADIUS,
+            min_value=1,
+            max_value=5000,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Horizontal ellipse radius derived from the calibrated cardinals.",
+            ),
+        )
+        radius_y_config = create_slider_config(
+            key=self.RADIUS_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ellipse Radius Y (px)"),
+            value=self.DEFAULT_RADIUS,
+            min_value=1,
+            max_value=5000,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Vertical ellipse radius derived from the calibrated cardinals.",
+            ),
+        )
+        dx_bias_config = create_slider_config(
+            key=self.DX_BIAS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ellipse Center X Bias (px)"),
+            value=0.0,
+            min_value=-1000,
+            max_value=1000,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Horizontal shift from anchor center to ellipse center.",
+            ),
+        )
+        dy_bias_config = create_slider_config(
+            key=self.DY_BIAS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Ellipse Center Y Bias (px)"),
+            value=0.0,
+            min_value=-1000,
+            max_value=1000,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Vertical shift from anchor center to ellipse center.",
+            ),
+        )
+        deadzone_config = create_slider_config(
+            key=self.DEADZONE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Distance Deadzone"),
+            value=self.DEFAULT_DEADZONE,
+            min_value=0.0,
+            max_value=0.3,
+            step=0.01,
+            description=pgettext(
+                "Controller Widgets",
+                "Ignore small cursor motion within this normalized radius.",
+            ),
+        )
+        max_radius_config = create_slider_config(
+            key=self.MAX_RADIUS_CLAMP_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Max Radius Clamp"),
+            value=self.DEFAULT_MAX_RADIUS_CLAMP,
+            min_value=1.0,
+            max_value=1.2,
+            step=0.01,
+            description=pgettext(
+                "Controller Widgets",
+                "Allow a slight overshoot when the cursor exceeds the calibrated range.",
+            ),
+        )
+        distance_curve_config = create_dropdown_config(
+            key=self.DISTANCE_CURVE_MODE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Distance Curve"),
+            value=self.DISTANCE_CURVE_LINEAR,
+            options=[
+                self.DISTANCE_CURVE_LINEAR,
+                self.DISTANCE_CURVE_GAMMA,
+                self.DISTANCE_CURVE_SMOOTHSTEP,
+            ],
+            option_labels={
+                self.DISTANCE_CURVE_LINEAR: pgettext("Controller Widgets", "Linear"),
+                self.DISTANCE_CURVE_GAMMA: pgettext("Controller Widgets", "Gamma"),
+                self.DISTANCE_CURVE_SMOOTHSTEP: pgettext(
+                    "Controller Widgets", "Smoothstep"
+                ),
+            },
+            description=pgettext(
+                "Controller Widgets",
+                "Select the distance response curve applied to normalized radius.",
+            ),
+        )
+        gamma_config = create_slider_config(
+            key=self.GAMMA_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Gamma"),
+            value=self.DEFAULT_GAMMA,
+            min_value=0.5,
+            max_value=2.5,
+            step=0.05,
+            description=pgettext(
+                "Controller Widgets",
+                "Gamma exponent for the distance curve.",
+            ),
+        )
+        angle_bias_config = create_slider_config(
+            key=self.ANGLE_BIAS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Angle Bias (deg)"),
+            value=self.DEFAULT_ANGLE_BIAS_DEG,
+            min_value=-30,
+            max_value=30,
+            step=0.5,
+            description=pgettext(
+                "Controller Widgets",
+                "Adjust the corrected angle by a small bias in degrees.",
+            ),
+        )
+        radius_scale_config = create_slider_config(
+            key=self.RADIUS_SCALE_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Radius Scale"),
+            value=self.DEFAULT_RADIUS_SCALE,
+            min_value=0.5,
+            max_value=1.5,
+            step=0.05,
+            description=pgettext(
+                "Controller Widgets",
+                "Scale the normalized distance after correction.",
+            ),
+        )
+        warn_threshold_config = create_slider_config(
+            key=self.WARN_THRESHOLD_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Symmetry Warning Threshold (px)"),
+            value=self.DEFAULT_WARN_THRESHOLD,
+            min_value=0.0,
+            max_value=50.0,
+            step=1.0,
+            description=pgettext(
+                "Controller Widgets",
+                "Threshold for reporting left/right or up/down mismatch warnings.",
+            ),
+        )
+        north_x_config = create_text_config(
+            key=self.NORTH_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "North X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated north boundary X coordinate."
+            ),
+        )
+        north_y_config = create_text_config(
+            key=self.NORTH_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "North Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated north boundary Y coordinate."
+            ),
+        )
+        south_x_config = create_text_config(
+            key=self.SOUTH_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "South X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated south boundary X coordinate."
+            ),
+        )
+        south_y_config = create_text_config(
+            key=self.SOUTH_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "South Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated south boundary Y coordinate."
+            ),
+        )
+        west_x_config = create_text_config(
+            key=self.WEST_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "West X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated west boundary X coordinate."
+            ),
+        )
+        west_y_config = create_text_config(
+            key=self.WEST_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "West Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated west boundary Y coordinate."
+            ),
+        )
+        east_x_config = create_text_config(
+            key=self.EAST_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "East X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated east boundary X coordinate."
+            ),
+        )
+        east_y_config = create_text_config(
+            key=self.EAST_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "East Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Calibrated east boundary Y coordinate."
+            ),
+        )
+        ne_x_config = create_text_config(
+            key=self.NE_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "NE X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional NE boundary X coordinate."
+            ),
+        )
+        ne_y_config = create_text_config(
+            key=self.NE_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "NE Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional NE boundary Y coordinate."
+            ),
+        )
+        nw_x_config = create_text_config(
+            key=self.NW_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "NW X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional NW boundary X coordinate."
+            ),
+        )
+        nw_y_config = create_text_config(
+            key=self.NW_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "NW Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional NW boundary Y coordinate."
+            ),
+        )
+        se_x_config = create_text_config(
+            key=self.SE_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "SE X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional SE boundary X coordinate."
+            ),
+        )
+        se_y_config = create_text_config(
+            key=self.SE_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "SE Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional SE boundary Y coordinate."
+            ),
+        )
+        sw_x_config = create_text_config(
+            key=self.SW_X_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "SW X (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional SW boundary X coordinate."
+            ),
+        )
+        sw_y_config = create_text_config(
+            key=self.SW_Y_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "SW Y (px)"),
+            value="",
+            description=pgettext(
+                "Controller Widgets", "Optional SW boundary Y coordinate."
+            ),
+        )
         apply_center_config = create_action_config(
             key=self.APPLY_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Apply Anchor Center"),
@@ -624,6 +942,34 @@ class SkillCasting(BaseWidget):
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
         self.add_config_item(y_offset_config)
+        self.add_config_item(enable_perspective_config)
+        self.add_config_item(radius_x_config)
+        self.add_config_item(radius_y_config)
+        self.add_config_item(dx_bias_config)
+        self.add_config_item(dy_bias_config)
+        self.add_config_item(deadzone_config)
+        self.add_config_item(max_radius_config)
+        self.add_config_item(distance_curve_config)
+        self.add_config_item(gamma_config)
+        self.add_config_item(angle_bias_config)
+        self.add_config_item(radius_scale_config)
+        self.add_config_item(warn_threshold_config)
+        self.add_config_item(north_x_config)
+        self.add_config_item(north_y_config)
+        self.add_config_item(south_x_config)
+        self.add_config_item(south_y_config)
+        self.add_config_item(west_x_config)
+        self.add_config_item(west_y_config)
+        self.add_config_item(east_x_config)
+        self.add_config_item(east_y_config)
+        self.add_config_item(ne_x_config)
+        self.add_config_item(ne_y_config)
+        self.add_config_item(nw_x_config)
+        self.add_config_item(nw_y_config)
+        self.add_config_item(se_x_config)
+        self.add_config_item(se_y_config)
+        self.add_config_item(sw_x_config)
+        self.add_config_item(sw_y_config)
         self.add_config_item(apply_center_config)
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
@@ -643,12 +989,47 @@ class SkillCasting(BaseWidget):
         self.add_config_change_callback(
             self.Y_OFFSET_CONFIG_KEY, self._on_y_offset_changed
         )
+        for key in (
+            self.ENABLE_PERSPECTIVE_CONFIG_KEY,
+            self.RADIUS_X_CONFIG_KEY,
+            self.RADIUS_Y_CONFIG_KEY,
+            self.DX_BIAS_CONFIG_KEY,
+            self.DY_BIAS_CONFIG_KEY,
+            self.DEADZONE_CONFIG_KEY,
+            self.MAX_RADIUS_CLAMP_CONFIG_KEY,
+            self.DISTANCE_CURVE_MODE_CONFIG_KEY,
+            self.GAMMA_CONFIG_KEY,
+            self.ANGLE_BIAS_CONFIG_KEY,
+            self.RADIUS_SCALE_CONFIG_KEY,
+            self.WARN_THRESHOLD_CONFIG_KEY,
+            self.NORTH_X_CONFIG_KEY,
+            self.NORTH_Y_CONFIG_KEY,
+            self.SOUTH_X_CONFIG_KEY,
+            self.SOUTH_Y_CONFIG_KEY,
+            self.WEST_X_CONFIG_KEY,
+            self.WEST_Y_CONFIG_KEY,
+            self.EAST_X_CONFIG_KEY,
+            self.EAST_Y_CONFIG_KEY,
+            self.NE_X_CONFIG_KEY,
+            self.NE_Y_CONFIG_KEY,
+            self.NW_X_CONFIG_KEY,
+            self.NW_Y_CONFIG_KEY,
+            self.SE_X_CONFIG_KEY,
+            self.SE_Y_CONFIG_KEY,
+            self.SW_X_CONFIG_KEY,
+            self.SW_Y_CONFIG_KEY,
+        ):
+            self.add_config_change_callback(key, self._on_perspective_config_changed)
 
         self._sync_center_inputs()
+        self._update_perspective_from_cardinals()
+        self._update_perspective_debug_labels()
         self.get_config_manager().connect(
             "confirmed",
             lambda *_args: (
                 self._sync_center_inputs(),
+                self._update_perspective_from_cardinals(),
+                self._update_perspective_debug_labels(),
                 self._update_circle_if_selected(),
                 self._emit_overlay_event("refresh"),
             ),
@@ -678,6 +1059,25 @@ class SkillCasting(BaseWidget):
             return
         self._update_circle_if_selected()
         self._emit_overlay_event("refresh")
+
+    def _on_perspective_config_changed(
+        self, key: str, value: object, restoring: bool
+    ) -> None:
+        if restoring:
+            return
+        if key in {
+            self.NORTH_X_CONFIG_KEY,
+            self.NORTH_Y_CONFIG_KEY,
+            self.SOUTH_X_CONFIG_KEY,
+            self.SOUTH_Y_CONFIG_KEY,
+            self.WEST_X_CONFIG_KEY,
+            self.WEST_Y_CONFIG_KEY,
+            self.EAST_X_CONFIG_KEY,
+            self.EAST_Y_CONFIG_KEY,
+        }:
+            self._update_perspective_from_cardinals()
+        self._update_perspective_debug_labels()
+        self._update_circle_if_selected()
 
     def _on_cast_timing_changed(self, key: str, value: str, restoring:bool) -> None:
         """处理施法时机配置变更"""
@@ -794,6 +1194,62 @@ class SkillCasting(BaseWidget):
             )
         )
 
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Perspective Ellipse Correction"),
+                [
+                    self.ENABLE_PERSPECTIVE_CONFIG_KEY,
+                    self.RADIUS_X_CONFIG_KEY,
+                    self.RADIUS_Y_CONFIG_KEY,
+                    self.DX_BIAS_CONFIG_KEY,
+                    self.DY_BIAS_CONFIG_KEY,
+                    self.DEADZONE_CONFIG_KEY,
+                    self.MAX_RADIUS_CLAMP_CONFIG_KEY,
+                    self.DISTANCE_CURVE_MODE_CONFIG_KEY,
+                    self.GAMMA_CONFIG_KEY,
+                    self.ANGLE_BIAS_CONFIG_KEY,
+                    self.RADIUS_SCALE_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Tune the ellipse correction model that stabilizes angle and distance.",
+                ),
+                expanded=False,
+            )
+        )
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Ellipse Calibration Points"),
+                [
+                    self.NORTH_X_CONFIG_KEY,
+                    self.NORTH_Y_CONFIG_KEY,
+                    self.SOUTH_X_CONFIG_KEY,
+                    self.SOUTH_Y_CONFIG_KEY,
+                    self.WEST_X_CONFIG_KEY,
+                    self.WEST_Y_CONFIG_KEY,
+                    self.EAST_X_CONFIG_KEY,
+                    self.EAST_Y_CONFIG_KEY,
+                    self.NE_X_CONFIG_KEY,
+                    self.NE_Y_CONFIG_KEY,
+                    self.NW_X_CONFIG_KEY,
+                    self.NW_Y_CONFIG_KEY,
+                    self.SE_X_CONFIG_KEY,
+                    self.SE_Y_CONFIG_KEY,
+                    self.SW_X_CONFIG_KEY,
+                    self.SW_Y_CONFIG_KEY,
+                    self.WARN_THRESHOLD_CONFIG_KEY,
+                ],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Enter the measured screen points for the range boundary.",
+                ),
+                expanded=False,
+            )
+        )
+
+        panel.append(self._build_perspective_debug_section())
+
         return panel
 
     def _on_calibrate_center_clicked(
@@ -812,6 +1268,8 @@ class SkillCasting(BaseWidget):
         self.set_config_value(self.CENTER_X_CONFIG_KEY, "")
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, "")
         self._sync_center_inputs()
+        self._update_perspective_from_cardinals()
+        self._update_perspective_debug_labels()
         self._emit_overlay_event("refresh")
 
     def _on_apply_center_clicked(
@@ -832,6 +1290,8 @@ class SkillCasting(BaseWidget):
         self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
         self._sync_center_inputs()
+        self._update_perspective_from_cardinals()
+        self._update_perspective_debug_labels()
         self._emit_overlay_event("refresh")
 
     def _on_mask_clicked(self, event: Event[dict[str, int]]) -> None:
@@ -918,6 +1378,8 @@ class SkillCasting(BaseWidget):
         self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
         self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
         self._sync_center_inputs()
+        self._update_perspective_from_cardinals()
+        self._update_perspective_debug_labels()
         self._set_calibration_mode(False)
         self._emit_overlay_event("refresh")
         return True
@@ -999,6 +1461,277 @@ class SkillCasting(BaseWidget):
         box.append(spin)
         box.set_visible(True)
         return box
+
+    def _build_perspective_debug_section(self) -> Gtk.Expander:
+        expander = Gtk.Expander(
+            label=pgettext("Controller Widgets", "Perspective Diagnostics")
+        )
+        expander.set_expanded(False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+
+        def add_debug_label(key: str) -> Gtk.Label:
+            label = Gtk.Label(label="", xalign=0)
+            label.set_wrap(True)
+            box.append(label)
+            self._perspective_debug_labels[key] = label
+            return label
+
+        add_debug_label("center")
+        add_debug_label("cardinals")
+        add_debug_label("radii")
+        add_debug_label("bias")
+        add_debug_label("corrected_center")
+        add_debug_label("scale_ratio")
+        add_debug_label("symmetry_warning")
+        add_debug_label("diagonals")
+
+        expander.set_child(box)
+        self._update_perspective_debug_labels()
+        return expander
+
+    def _parse_float_config(self, key: str) -> float | None:
+        value = self.get_config_value(key)
+        if value in (None, ""):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return parsed
+
+    def _get_point_from_config(
+        self, x_key: str, y_key: str
+    ) -> tuple[float, float] | None:
+        x_val = self._parse_float_config(x_key)
+        y_val = self._parse_float_config(y_key)
+        if x_val is None or y_val is None:
+            return None
+        return (x_val, y_val)
+
+    def _update_perspective_from_cardinals(self) -> None:
+        center = self._get_window_center()
+        north = self._get_point_from_config(self.NORTH_X_CONFIG_KEY, self.NORTH_Y_CONFIG_KEY)
+        south = self._get_point_from_config(self.SOUTH_X_CONFIG_KEY, self.SOUTH_Y_CONFIG_KEY)
+        west = self._get_point_from_config(self.WEST_X_CONFIG_KEY, self.WEST_Y_CONFIG_KEY)
+        east = self._get_point_from_config(self.EAST_X_CONFIG_KEY, self.EAST_Y_CONFIG_KEY)
+        if north is None or south is None or west is None or east is None:
+            return
+        model = PerspectiveEllipseModel.from_cardinals(
+            center=center,
+            north=north,
+            south=south,
+            west=west,
+            east=east,
+        )
+        if model.radius_x > 0:
+            self.set_config_value(self.RADIUS_X_CONFIG_KEY, model.radius_x)
+        if model.radius_y > 0:
+            self.set_config_value(self.RADIUS_Y_CONFIG_KEY, model.radius_y)
+        self.set_config_value(self.DX_BIAS_CONFIG_KEY, model.dx_bias)
+        self.set_config_value(self.DY_BIAS_CONFIG_KEY, model.dy_bias)
+
+    def _get_perspective_model(self) -> PerspectiveEllipseModel | None:
+        center_x, center_y = self._get_window_center()
+        radius_x = self._parse_float_config(self.RADIUS_X_CONFIG_KEY)
+        radius_y = self._parse_float_config(self.RADIUS_Y_CONFIG_KEY)
+        dx_bias = self._parse_float_config(self.DX_BIAS_CONFIG_KEY)
+        dy_bias = self._parse_float_config(self.DY_BIAS_CONFIG_KEY)
+        if radius_x is None or radius_y is None:
+            return None
+        if dx_bias is None:
+            dx_bias = 0.0
+        if dy_bias is None:
+            dy_bias = 0.0
+        if radius_x <= 0 or radius_y <= 0:
+            return None
+        return PerspectiveEllipseModel(
+            center_x=center_x,
+            center_y=center_y,
+            radius_x=radius_x,
+            radius_y=radius_y,
+            dx_bias=dx_bias,
+            dy_bias=dy_bias,
+        )
+
+    def _distance_curve(self, radius: float) -> float:
+        mode = self.get_config_value(self.DISTANCE_CURVE_MODE_CONFIG_KEY)
+        gamma = self._parse_float_config(self.GAMMA_CONFIG_KEY) or self.DEFAULT_GAMMA
+        if mode == self.DISTANCE_CURVE_GAMMA:
+            return math.pow(radius, gamma)
+        if mode == self.DISTANCE_CURVE_SMOOTHSTEP:
+            return radius * radius * (3.0 - 2.0 * radius)
+        return radius
+
+    def _inverse_distance_curve(self, radius: float) -> float:
+        mode = self.get_config_value(self.DISTANCE_CURVE_MODE_CONFIG_KEY)
+        gamma = self._parse_float_config(self.GAMMA_CONFIG_KEY) or self.DEFAULT_GAMMA
+        if mode == self.DISTANCE_CURVE_GAMMA:
+            if gamma == 0:
+                return 0.0
+            return math.pow(radius, 1.0 / gamma)
+        if mode == self.DISTANCE_CURVE_SMOOTHSTEP:
+            return radius
+        return radius
+
+    def _update_perspective_debug_labels(self) -> None:
+        if not self._perspective_debug_labels:
+            return
+        center_x, center_y = self._get_window_center()
+        north = self._get_point_from_config(self.NORTH_X_CONFIG_KEY, self.NORTH_Y_CONFIG_KEY)
+        south = self._get_point_from_config(self.SOUTH_X_CONFIG_KEY, self.SOUTH_Y_CONFIG_KEY)
+        west = self._get_point_from_config(self.WEST_X_CONFIG_KEY, self.WEST_Y_CONFIG_KEY)
+        east = self._get_point_from_config(self.EAST_X_CONFIG_KEY, self.EAST_Y_CONFIG_KEY)
+        radius_x = self._parse_float_config(self.RADIUS_X_CONFIG_KEY)
+        radius_y = self._parse_float_config(self.RADIUS_Y_CONFIG_KEY)
+        dx_bias = self._parse_float_config(self.DX_BIAS_CONFIG_KEY)
+        dy_bias = self._parse_float_config(self.DY_BIAS_CONFIG_KEY)
+        dx_bias = dx_bias if dx_bias is not None else 0.0
+        dy_bias = dy_bias if dy_bias is not None else 0.0
+        corrected_center = (center_x + dx_bias, center_y + dy_bias)
+        scale_ratio = None
+        if radius_x and radius_y and radius_x > 0:
+            scale_ratio = radius_y / radius_x
+
+        self._perspective_debug_labels["center"].set_label(
+            pgettext("Controller Widgets", "Center: ({x:.2f}, {y:.2f})").format(
+                x=center_x, y=center_y
+            )
+        )
+
+        if north and south and west and east:
+            self._perspective_debug_labels["cardinals"].set_label(
+                pgettext(
+                    "Controller Widgets",
+                    "N=({nx:.2f}, {ny:.2f}) S=({sx:.2f}, {sy:.2f}) "
+                    "W=({wx:.2f}, {wy:.2f}) E=({ex:.2f}, {ey:.2f})",
+                ).format(
+                    nx=north[0],
+                    ny=north[1],
+                    sx=south[0],
+                    sy=south[1],
+                    wx=west[0],
+                    wy=west[1],
+                    ex=east[0],
+                    ey=east[1],
+                )
+            )
+        else:
+            self._perspective_debug_labels["cardinals"].set_label(
+                pgettext("Controller Widgets", "N/S/W/E: (not set)")
+            )
+
+        if radius_x is not None and radius_y is not None:
+            self._perspective_debug_labels["radii"].set_label(
+                pgettext(
+                    "Controller Widgets",
+                    "r_x={rx:.2f} r_y={ry:.2f}",
+                ).format(rx=radius_x, ry=radius_y)
+            )
+        else:
+            self._perspective_debug_labels["radii"].set_label(
+                pgettext("Controller Widgets", "r_x/r_y: (not set)")
+            )
+
+        self._perspective_debug_labels["bias"].set_label(
+            pgettext(
+                "Controller Widgets",
+                "dx_bias={dx:.2f} dy_bias={dy:.2f}",
+            ).format(dx=dx_bias, dy=dy_bias)
+        )
+
+        self._perspective_debug_labels["corrected_center"].set_label(
+            pgettext(
+                "Controller Widgets",
+                "Corrected center: ({x:.2f}, {y:.2f})",
+            ).format(x=corrected_center[0], y=corrected_center[1])
+        )
+
+        if scale_ratio is not None:
+            self._perspective_debug_labels["scale_ratio"].set_label(
+                pgettext("Controller Widgets", "Scale ratio r_y/r_x={ratio:.4f}").format(
+                    ratio=scale_ratio
+                )
+            )
+        else:
+            self._perspective_debug_labels["scale_ratio"].set_label(
+                pgettext("Controller Widgets", "Scale ratio r_y/r_x: (n/a)")
+            )
+
+        warn_threshold = self._parse_float_config(self.WARN_THRESHOLD_CONFIG_KEY)
+        if warn_threshold is None:
+            warn_threshold = self.DEFAULT_WARN_THRESHOLD
+        warning_messages = []
+        if west and east:
+            left = center_x - west[0]
+            right = east[0] - center_x
+            mismatch = abs(left - right)
+            if mismatch > warn_threshold:
+                warning_messages.append(
+                    pgettext(
+                        "Controller Widgets",
+                        "Left/right mismatch: {value:.2f}px",
+                    ).format(value=mismatch)
+                )
+        if north and south:
+            up = center_y - north[1]
+            down = south[1] - center_y
+            mismatch = abs(up - down)
+            if mismatch > warn_threshold:
+                warning_messages.append(
+                    pgettext(
+                        "Controller Widgets",
+                        "Up/down mismatch: {value:.2f}px",
+                    ).format(value=mismatch)
+                )
+        if warning_messages:
+            warning_text = " | ".join(warning_messages)
+        else:
+            warning_text = pgettext("Controller Widgets", "Symmetry: OK")
+        self._perspective_debug_labels["symmetry_warning"].set_label(warning_text)
+
+        model = self._get_perspective_model()
+        diagonals = {
+            "NE": (self.NE_X_CONFIG_KEY, self.NE_Y_CONFIG_KEY, 45.0),
+            "NW": (self.NW_X_CONFIG_KEY, self.NW_Y_CONFIG_KEY, 135.0),
+            "SW": (self.SW_X_CONFIG_KEY, self.SW_Y_CONFIG_KEY, -135.0),
+            "SE": (self.SE_X_CONFIG_KEY, self.SE_Y_CONFIG_KEY, -45.0),
+        }
+        if model is None:
+            self._perspective_debug_labels["diagonals"].set_label(
+                pgettext("Controller Widgets", "Diagonals: (n/a)")
+            )
+        else:
+            entries = []
+            for label, (x_key, y_key, expected_angle) in diagonals.items():
+                point = self._get_point_from_config(x_key, y_key)
+                if point is None:
+                    continue
+                normalized = model.normalize_point(point[0], point[1])
+                if normalized is None:
+                    continue
+                _u, _v, _radius, raw_angle = normalized
+                angle_deg = math.degrees(raw_angle)
+                delta = angle_deg - expected_angle
+                while delta > 180:
+                    delta -= 360
+                while delta < -180:
+                    delta += 360
+                entries.append(
+                    pgettext(
+                        "Controller Widgets",
+                        "{label}: {angle:.1f}° (Δ {delta:.1f}°)",
+                    ).format(label=label, angle=angle_deg, delta=delta)
+                )
+            if entries:
+                self._perspective_debug_labels["diagonals"].set_label(
+                    " | ".join(entries)
+                )
+            else:
+                self._perspective_debug_labels["diagonals"].set_label(
+                    pgettext("Controller Widgets", "Diagonals: (not set)")
+                )
 
     # def _on_custom_event(self, event):
     #     """处理自定义事件"""
@@ -1327,7 +2060,7 @@ class SkillCasting(BaseWidget):
         center_x, center_y = self._get_window_center()
         outer_radius = self.get_config_value("circle_radius")
         if not isinstance(outer_radius, (int, float)) or outer_radius <= 0:
-            outer_radius = 200
+            outer_radius = self.DEFAULT_RADIUS
         raw_y_offset = self.get_config_value(self.Y_OFFSET_CONFIG_KEY)
         try:
             y_offset = float(raw_y_offset)
@@ -1341,6 +2074,51 @@ class SkillCasting(BaseWidget):
             y_offset=y_offset,
         )
 
+    def _map_point_with_perspective(
+        self,
+        mouse_x: float,
+        mouse_y: float,
+        widget_center_x: float,
+        widget_center_y: float,
+        widget_radius: float,
+    ) -> tuple[float, float] | None:
+        model = self._get_perspective_model()
+        if model is None:
+            return None
+        normalized = model.normalize_point(mouse_x, mouse_y)
+        if normalized is None:
+            return None
+        _u, _v, raw_radius, raw_angle = normalized
+        deadzone = self._parse_float_config(self.DEADZONE_CONFIG_KEY)
+        if deadzone is None:
+            deadzone = self.DEFAULT_DEADZONE
+        if raw_radius < deadzone:
+            return (widget_center_x, widget_center_y)
+        max_radius = self._parse_float_config(self.MAX_RADIUS_CLAMP_CONFIG_KEY)
+        if max_radius is None:
+            max_radius = self.DEFAULT_MAX_RADIUS_CLAMP
+        max_radius = max(1.0, max_radius)
+        clamped_radius = min(raw_radius, max_radius)
+        base_radius = min(clamped_radius, 1.0)
+        curved_radius = self._distance_curve(base_radius)
+        if clamped_radius > 1.0:
+            curved_radius = min(curved_radius + (clamped_radius - 1.0), max_radius)
+
+        radius_scale = self._parse_float_config(self.RADIUS_SCALE_CONFIG_KEY)
+        if radius_scale is None:
+            radius_scale = self.DEFAULT_RADIUS_SCALE
+        distance = max(curved_radius * radius_scale, 0.0)
+        distance = min(distance, max_radius)
+
+        angle_bias = self._parse_float_config(self.ANGLE_BIAS_CONFIG_KEY)
+        if angle_bias is None:
+            angle_bias = self.DEFAULT_ANGLE_BIAS_DEG
+        angle = raw_angle + math.radians(angle_bias)
+
+        target_x = widget_center_x + math.cos(angle) * distance * widget_radius
+        target_y = widget_center_y + math.sin(angle) * distance * widget_radius
+        return (target_x, target_y)
+
     def _map_circle_to_circle(
         self, mouse_x: float, mouse_y: float
     ) -> tuple[float, float]:
@@ -1353,8 +2131,18 @@ class SkillCasting(BaseWidget):
         widget_center_x = self.center_x
         widget_center_y = self.center_y
         widget_radius = self.width / 2
-        calibration = self._get_v2_calibration()
+        if self.get_config_value(self.ENABLE_PERSPECTIVE_CONFIG_KEY):
+            mapped = self._map_point_with_perspective(
+                mouse_x,
+                mouse_y,
+                widget_center_x,
+                widget_center_y,
+                widget_radius,
+            )
+            if mapped is not None:
+                return mapped
 
+        calibration = self._get_v2_calibration()
         return map_pointer_to_widget_target(
             mouse_x,
             mouse_y,
