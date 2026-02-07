@@ -1596,6 +1596,63 @@ class SkillCasting(BaseWidget):
             return False
         return self._apply_calibration_click(x, y)
 
+    def on_widget_right_clicked(self, x, y):
+        root = self.get_root()
+        if root is None:
+            return False
+
+        popover = Gtk.Popover()
+        popover.set_parent(root)
+        popover.set_has_arrow(False)
+        popover.set_autohide(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        popover.set_child(box)
+
+        copy_button = Gtk.Button(label=pgettext("Controller Widgets", "Copy widget"))
+
+        def on_copy_clicked(_button):
+            window = self.get_root()
+            if window is None:
+                popover.popdown()
+                return
+            widget_type = type(self).__name__.lower()
+            new_widget = window.widget_factory.create_widget(
+                widget_type,
+                x=self.x + 20,
+                y=self.y + 20,
+                width=self.width,
+                height=self.height,
+                event_bus=window.event_bus,
+                pointer_id_manager=window.pointer_id_manager,
+                key_registry=window.key_registry,
+            )
+            if new_widget is None:
+                popover.popdown()
+                return
+            new_widget.final_keys = self.final_keys.copy()
+            new_widget.get_config_manager().deserialize(
+                self.get_config_manager().serialize()
+            )
+            window.create_widget_at_position(new_widget, new_widget.x, new_widget.y)
+            popover.popdown()
+
+        copy_button.connect("clicked", on_copy_clicked)
+        box.append(copy_button)
+
+        rect = Gdk.Rectangle()
+        rect.x = int(self.x + x)
+        rect.y = int(self.y + y)
+        rect.width = 1
+        rect.height = 1
+        popover.set_pointing_to(rect)
+        popover.popup()
+        return True
+
     def _apply_calibration_click(self, x: float, y: float) -> bool:
         if not self._center_calibration_active:
             return False
