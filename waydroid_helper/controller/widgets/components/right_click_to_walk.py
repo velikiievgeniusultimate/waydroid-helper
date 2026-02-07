@@ -184,6 +184,8 @@ class RightClickToWalk(BaseWidget):
         self._locked_target_position: tuple[float, float] | None = None
         self._anchor_set_mode: str | None = None
         self._diag_warning_label: Gtk.Label | None = None
+        self._center_adjustments: dict[str, Gtk.Adjustment] = {}
+        self._center_adjustment_updating: set[str] = set()
 
         self.setup_config()
         self.event_bus.subscribe(
@@ -809,15 +811,6 @@ class RightClickToWalk(BaseWidget):
                 "Click to enter calibration mode, then click the character position on screen.",
             ),
         )
-        reset_center_config = create_action_config(
-            key=self.RESET_CENTER_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Reset Center"),
-            button_label=pgettext("Controller Widgets", "Reset"),
-            description=pgettext(
-                "Controller Widgets",
-                "Clear the calibrated center and return to the screen center.",
-            ),
-        )
         center_x_config = create_text_config(
             key=self.CENTER_X_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Center X"),
@@ -850,14 +843,6 @@ class RightClickToWalk(BaseWidget):
             value="",
             description=pgettext(
                 "Controller Widgets", "Manual center Y coordinate in pixels."
-            ),
-        )
-        apply_center_config = create_action_config(
-            key=self.APPLY_CENTER_CONFIG_KEY,
-            label=pgettext("Controller Widgets", "Apply Center"),
-            button_label=pgettext("Controller Widgets", "Apply"),
-            description=pgettext(
-                "Controller Widgets", "Apply the manual center coordinates."
             ),
         )
         gain_enabled_config = create_switch_config(
@@ -1219,12 +1204,11 @@ class RightClickToWalk(BaseWidget):
         )
 
         self.add_config_item(calibrate_center_config)
-        self.add_config_item(reset_center_config)
+        # reset_center_config intentionally not added (UI removed)
         self.add_config_item(center_x_config)
         self.add_config_item(center_y_config)
         self.add_config_item(center_x_input_config)
         self.add_config_item(center_y_input_config)
-        self.add_config_item(apply_center_config)
         self.add_config_item(gain_enabled_config)
         self.add_config_item(x_gain_config)
         self.add_config_item(y_gain_config)
@@ -1270,12 +1254,6 @@ class RightClickToWalk(BaseWidget):
 
         self.add_config_change_callback(
             self.CALIBRATE_CENTER_CONFIG_KEY, self._on_calibrate_center_clicked
-        )
-        self.add_config_change_callback(
-            self.RESET_CENTER_CONFIG_KEY, self._on_reset_center_clicked
-        )
-        self.add_config_change_callback(
-            self.APPLY_CENTER_CONFIG_KEY, self._on_apply_center_clicked
         )
         self.add_config_change_callback(
             self.GAIN_ENABLED_CONFIG_KEY, self._on_gain_enabled_changed
@@ -1380,7 +1358,10 @@ class RightClickToWalk(BaseWidget):
                 desc_label.set_wrap(True)
                 box.append(desc_label)
             for key in keys:
-                widget = config_manager.create_ui_widget_for_key(key)
+                if key in (self.CENTER_X_INPUT_CONFIG_KEY, self.CENTER_Y_INPUT_CONFIG_KEY):
+                    widget = self._build_center_input_control(config_manager, key)
+                else:
+                    widget = config_manager.create_ui_widget_for_key(key)
                 if widget is None:
                     add_missing_label(box, key)
                 else:
@@ -1396,10 +1377,8 @@ class RightClickToWalk(BaseWidget):
                 pgettext("Controller Widgets", "Center Calibration"),
                 [
                     self.CALIBRATE_CENTER_CONFIG_KEY,
-                    self.RESET_CENTER_CONFIG_KEY,
                     self.CENTER_X_INPUT_CONFIG_KEY,
                     self.CENTER_Y_INPUT_CONFIG_KEY,
-                    self.APPLY_CENTER_CONFIG_KEY,
                 ],
                 description=pgettext(
                     "Controller Widgets",
@@ -1751,12 +1730,101 @@ class RightClickToWalk(BaseWidget):
 
     def _sync_center_inputs(self) -> None:
         calibrated = self._get_calibrated_center()
+        adjustment_x = self._center_adjustments.get(self.CENTER_X_INPUT_CONFIG_KEY)
+        adjustment_y = self._center_adjustments.get(self.CENTER_Y_INPUT_CONFIG_KEY)
         if calibrated is None:
             self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, "")
             self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, "")
+            if adjustment_x is not None:
+                self._center_adjustment_updating.add(self.CENTER_X_INPUT_CONFIG_KEY)
+                try:
+                    adjustment_x.set_value(0)
+                finally:
+                    self._center_adjustment_updating.discard(self.CENTER_X_INPUT_CONFIG_KEY)
+            if adjustment_y is not None:
+                self._center_adjustment_updating.add(self.CENTER_Y_INPUT_CONFIG_KEY)
+                try:
+                    adjustment_y.set_value(0)
+                finally:
+                    self._center_adjustment_updating.discard(self.CENTER_Y_INPUT_CONFIG_KEY)
             return
-        self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(int(calibrated[0])))
-        self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(int(calibrated[1])))
+        x_value = int(calibrated[0])
+        y_value = int(calibrated[1])
+        self.set_config_value(self.CENTER_X_INPUT_CONFIG_KEY, str(x_value))
+        self.set_config_value(self.CENTER_Y_INPUT_CONFIG_KEY, str(y_value))
+        if adjustment_x is not None:
+            self._center_adjustment_updating.add(self.CENTER_X_INPUT_CONFIG_KEY)
+            try:
+                adjustment_x.set_value(x_value)
+            finally:
+                self._center_adjustment_updating.discard(self.CENTER_X_INPUT_CONFIG_KEY)
+        if adjustment_y is not None:
+            self._center_adjustment_updating.add(self.CENTER_Y_INPUT_CONFIG_KEY)
+            try:
+                adjustment_y.set_value(y_value)
+            finally:
+                self._center_adjustment_updating.discard(self.CENTER_Y_INPUT_CONFIG_KEY)
+
+    def _build_center_input_control(self, config_manager, key: str) -> Gtk.Widget:
+        config = config_manager.get_config(key)
+        label_text = config.label if config is not None else key
+        description = config.description if config is not None else ""
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        label = Gtk.Label(label=label_text, xalign=0)
+        if description:
+            label.set_tooltip_text(description)
+        box.append(label)
+
+        w, h = self._get_window_size()
+        max_value = max(int(w), int(h), 1)
+        adjustment = Gtk.Adjustment(
+            value=float(self._get_center_adjustment_initial_value(key)),
+            lower=0.0,
+            upper=float(max_value),
+            step_increment=1.0,
+            page_increment=10.0,
+        )
+        self._center_adjustments[key] = adjustment
+
+        spin = Gtk.SpinButton()
+        spin.set_adjustment(adjustment)
+        spin.set_digits(0)
+        spin.set_numeric(True)
+        spin.set_width_chars(6)
+        spin.set_increments(1, 10)
+
+        def on_value_changed(_adjustment):
+            if key in self._center_adjustment_updating:
+                return
+            value = int(round(adjustment.get_value()))
+            value = max(0, min(int(max_value), value))
+            self._center_adjustment_updating.add(key)
+            try:
+                adjustment.set_value(value)
+            finally:
+                self._center_adjustment_updating.discard(key)
+            if key == self.CENTER_X_INPUT_CONFIG_KEY:
+                self.set_config_value(self.CENTER_X_CONFIG_KEY, float(value))
+            elif key == self.CENTER_Y_INPUT_CONFIG_KEY:
+                self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(value))
+            self.set_config_value(key, str(value))
+            self._emit_overlay_event("refresh")
+
+        adjustment.connect("value-changed", on_value_changed)
+        box.append(spin)
+        box.set_visible(True)
+        return box
+
+    def _get_center_adjustment_initial_value(self, key: str) -> int:
+        calibrated = self._get_calibrated_center()
+        if calibrated is None:
+            return 0
+        if key == self.CENTER_X_INPUT_CONFIG_KEY:
+            return int(calibrated[0])
+        if key == self.CENTER_Y_INPUT_CONFIG_KEY:
+            return int(calibrated[1])
+        return 0
 
     def _sync_gain_inputs(self) -> None:
         x_gain, y_gain = self._get_saved_gains()
@@ -1911,6 +1979,19 @@ class RightClickToWalk(BaseWidget):
             return
         self._anchor_set_mode = None
         self._emit_overlay_event("stop")
+
+    def handle_calibration_click(self, x: float, y: float, _button: int) -> bool:
+        if not self._calibration_mode:
+            return False
+        w, h = self._get_window_size()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            return False
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._set_calibration_mode(False)
+        self._emit_overlay_event("refresh")
+        return True
 
     def _sanitize_gain_value(self, raw_value: object) -> float | None:
         try:
