@@ -1912,6 +1912,19 @@ class RightClickToWalk(BaseWidget):
         self._anchor_set_mode = None
         self._emit_overlay_event("stop")
 
+    def handle_calibration_click(self, x: float, y: float, _button: int) -> bool:
+        if not self._calibration_mode:
+            return False
+        w, h = self._get_window_size()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            return False
+        self.set_config_value(self.CENTER_X_CONFIG_KEY, float(x))
+        self.set_config_value(self.CENTER_Y_CONFIG_KEY, float(y))
+        self._sync_center_inputs()
+        self._set_calibration_mode(False)
+        self._emit_overlay_event("refresh")
+        return True
+
     def _sanitize_gain_value(self, raw_value: object) -> float | None:
         try:
             value = float(raw_value)
