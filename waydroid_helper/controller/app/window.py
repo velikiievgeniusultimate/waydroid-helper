@@ -231,7 +231,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             self.queue_draw()
 
     def handle_edit_mouse_pressed(self, x: float, y: float, button: int) -> bool:
-        if self.mapping_mode or button != Gdk.BUTTON_PRIMARY:
+        if button != Gdk.BUTTON_PRIMARY:
             return False
         if (
             self.active_widget is not None
@@ -240,6 +240,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             handle_click = getattr(self.active_widget, "handle_calibration_click", None)
             if callable(handle_click):
                 return bool(handle_click(float(x), float(y), button))
+        if self.mapping_mode:
+            return False
         if self.drag_widget is not None:
             return True
         target_angle = self._find_angle_warp_handle(x, y)
@@ -529,7 +531,16 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         if not self.widgets:
             return
 
-        if not self.mapping_mode:
+        is_calibrating = False
+        if self.active_widget is not None:
+            is_calibrating = bool(getattr(self.active_widget, "is_calibrating", False))
+
+        tuning_active = False
+        tuning_widget = self.tuning_widget
+        if tuning_widget is not None:
+            tuning_active = bool(getattr(tuning_widget, "is_tuning", False))
+
+        if not self.mapping_mode and not is_calibrating and not tuning_active:
             for center_widget in self.widgets:
                 get_debug = getattr(center_widget, "is_debug_boundary_enabled", None)
                 if callable(get_debug) and not get_debug():
@@ -558,15 +569,6 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                             self._draw_angle_warp_debug(cr, angle_data)
             return
 
-        is_calibrating = False
-        if self.active_widget is not None:
-            is_calibrating = bool(getattr(self.active_widget, "is_calibrating", False))
-
-        tuning_active = False
-        tuning_widget = self.tuning_widget
-        if tuning_widget is not None:
-            tuning_active = bool(getattr(tuning_widget, "is_tuning", False))
-
         if is_calibrating or tuning_active:
             cr.set_source_rgba(0, 0, 0, 0.45)
             cr.rectangle(0, 0, width, height)
@@ -581,7 +583,20 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.arc(cursor_x, cursor_y, 6, 0, 2 * math.pi)
             cr.stroke()
 
-            cursor_text = f"Cursor: {self.cursor_position[0]}, {self.cursor_position[1]}"
+            line_color = (0.2, 0.8, 1.0, 0.9)
+            cr.set_source_rgba(*line_color)
+            cr.set_line_width(1.5)
+            cr.move_to(0, cursor_y)
+            cr.line_to(cursor_x, cursor_y)
+            cr.move_to(cursor_x, cursor_y)
+            cr.line_to(width, cursor_y)
+            cr.move_to(cursor_x, 0)
+            cr.line_to(cursor_x, cursor_y)
+            cr.move_to(cursor_x, cursor_y)
+            cr.line_to(cursor_x, height)
+            cr.stroke()
+
+            cursor_text = f"X: {self.cursor_position[0]}  Y: {self.cursor_position[1]}"
 
             get_effective_center = getattr(self.active_widget, "get_effective_center", None)
             center_text = "Center: -,-"
@@ -1149,6 +1164,8 @@ class TransparentWindow(Adw.Window):
             return
         if action == "start":
             self.right_click_overlay.set_active_widget(widget)
+            self._set_external_settings_windows_visible(False)
+            self._set_mapping_ui_visible(False)
             should_hide_panel = True
             panel_visibility = getattr(widget, "should_hide_settings_panel_on_calibration", None)
             if callable(panel_visibility):
@@ -1162,6 +1179,8 @@ class TransparentWindow(Adw.Window):
             if self.right_click_overlay.active_widget is widget:
                 self.right_click_overlay.set_active_widget(None)
             self._set_settings_panel_visible(True, widget)
+            self._set_external_settings_windows_visible(True)
+            self._set_mapping_ui_visible(True)
             self._set_mask_interactive(False)
             self._set_mask_dimmed(False)
             return
@@ -1187,6 +1206,21 @@ class TransparentWindow(Adw.Window):
         if self.active_settings_popover is not None:
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
+
+    def _set_external_settings_windows_visible(self, visible: bool) -> None:
+        for window in list(self._external_settings_windows.values()):
+            try:
+                window.set_visible(visible)
+            except Exception as exc:
+                logger.error("Failed to toggle external settings window: %s", exc)
+
+    def _set_mapping_ui_visible(self, visible: bool) -> None:
+        self.fixed.set_visible(visible)
+        self.circle_overlay.set_visible(visible)
+        if visible:
+            self.right_click_overlay.set_visible(bool(self.right_click_overlay.widgets))
+        else:
+            self.right_click_overlay.set_visible(True)
 
     def _set_mask_interactive(self, interactive: bool) -> None:
         if self.active_mask_layer is None:
