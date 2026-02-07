@@ -581,7 +581,20 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.arc(cursor_x, cursor_y, 6, 0, 2 * math.pi)
             cr.stroke()
 
-            cursor_text = f"Cursor: {self.cursor_position[0]}, {self.cursor_position[1]}"
+            line_color = (0.2, 0.8, 1.0, 0.9)
+            cr.set_source_rgba(*line_color)
+            cr.set_line_width(1.5)
+            cr.move_to(0, cursor_y)
+            cr.line_to(cursor_x, cursor_y)
+            cr.move_to(cursor_x, cursor_y)
+            cr.line_to(width, cursor_y)
+            cr.move_to(cursor_x, 0)
+            cr.line_to(cursor_x, cursor_y)
+            cr.move_to(cursor_x, cursor_y)
+            cr.line_to(cursor_x, height)
+            cr.stroke()
+
+            cursor_text = f"X: {self.cursor_position[0]}  Y: {self.cursor_position[1]}"
 
             get_effective_center = getattr(self.active_widget, "get_effective_center", None)
             center_text = "Center: -,-"
@@ -682,11 +695,13 @@ class TransparentWindow(Adw.Window):
         blurb="The current operating mode (edit or mapping)",
     )
 
-    def __init__(self, app, display_name: str):
+    def __init__(self, app, display_name: str, host_display_name: str | None = None):
         super().__init__(application=app)
 
         # 添加关闭状态标志，避免重复关闭
         self._is_closing = False
+        self._host_display_name = host_display_name
+        self._external_settings_windows: dict[object, Adw.Window] = {}
 
         if self.get_display().get_name() != display_name:
             display = Gdk.Display.open(display_name)
@@ -810,6 +825,9 @@ class TransparentWindow(Adw.Window):
     def _on_widget_settings_requested(self, event: "Event[bool]"):
         """Callback when a widget requests settings, pops up a Popover"""
         widget = event.source
+
+        if self._open_external_settings_window(widget):
+            return
 
         popover = Gtk.Popover()
         popover.set_autohide(event.data)
@@ -1039,6 +1057,99 @@ class TransparentWindow(Adw.Window):
 
         popover.popup()
 
+    def _open_external_settings_window(self, widget: Gtk.Widget) -> bool:
+        from waydroid_helper.controller.widgets.components.right_click_to_walk import (
+            RightClickToWalk,
+        )
+
+        if not isinstance(widget, RightClickToWalk):
+            return False
+
+        existing_window = self._external_settings_windows.get(widget)
+        if existing_window is not None:
+            existing_window.present()
+            return True
+
+        if not self._host_display_name:
+            return False
+
+        display = Gdk.Display.open(self._host_display_name)
+        if display is None:
+            logger.error(
+                "Failed to open host display for external settings window: %s",
+                self._host_display_name,
+            )
+            return False
+
+        try:
+            window = Adw.Window(application=self.get_application())
+            window.set_display(display)
+            window.set_title(widget.WIDGET_NAME)
+            if hasattr(window, "set_resizable"):
+                window.set_resizable(True)
+            if hasattr(window, "set_decorated"):
+                window.set_decorated(True)
+
+            header_bar = Gtk.HeaderBar()
+            header_bar.set_show_title_buttons(False)
+            header_bar.set_title_widget(Gtk.Label(label=widget.WIDGET_NAME))
+
+            minimize_button = Gtk.Button.new()
+            minimize_button.set_icon_name("window-minimize-symbolic")
+            minimize_button.add_css_class("flat")
+            minimize_button.add_css_class("dim-label")
+            minimize_button.connect(
+                "clicked",
+                lambda _button: window.minimize()
+                if hasattr(window, "minimize")
+                else window.set_visible(False),
+            )
+
+            close_button = Gtk.Button.new()
+            close_button.set_icon_name("window-close-symbolic")
+            close_button.add_css_class("flat")
+            close_button.add_css_class("destructive-action")
+            close_button.connect("clicked", lambda _button: window.close())
+
+            header_bar.pack_end(minimize_button)
+            header_bar.pack_end(close_button)
+
+            title_handle = Gtk.WindowHandle()
+            title_handle.set_child(header_bar)
+
+            window.set_default_size(
+                widget.SETTINGS_PANEL_MIN_WIDTH,
+                widget.SETTINGS_PANEL_MIN_HEIGHT,
+            )
+
+            panel = widget.create_settings_panel()
+            scrolled = Gtk.ScrolledWindow()
+            scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scrolled.set_hexpand(True)
+            scrolled.set_vexpand(True)
+            scrolled.set_child(panel)
+
+            content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            content_box.set_hexpand(True)
+            content_box.set_vexpand(True)
+            content_box.append(title_handle)
+            content_box.append(scrolled)
+            window.set_content(content_box)
+
+            def on_window_close(_window):
+                config_manager = widget.get_config_manager()
+                config_manager.clear_ui_references()
+                self._external_settings_windows.pop(widget, None)
+                return False
+
+            window.connect("close-request", on_window_close)
+            self._external_settings_windows[widget] = window
+            window.present()
+            return True
+        except Exception as exc:
+            logger.error("Failed to open external settings window: %s", exc)
+            return False
+
     def _on_right_click_to_walk_overlay(self, event: "Event[dict[str, object]]") -> None:
         data = event.data or {}
         action = data.get("action")
@@ -1051,6 +1162,8 @@ class TransparentWindow(Adw.Window):
             return
         if action == "start":
             self.right_click_overlay.set_active_widget(widget)
+            self._set_external_settings_windows_visible(False)
+            self._set_mapping_ui_visible(False)
             should_hide_panel = True
             panel_visibility = getattr(widget, "should_hide_settings_panel_on_calibration", None)
             if callable(panel_visibility):
@@ -1064,6 +1177,8 @@ class TransparentWindow(Adw.Window):
             if self.right_click_overlay.active_widget is widget:
                 self.right_click_overlay.set_active_widget(None)
             self._set_settings_panel_visible(True, widget)
+            self._set_external_settings_windows_visible(True)
+            self._set_mapping_ui_visible(True)
             self._set_mask_interactive(False)
             self._set_mask_dimmed(False)
             return
@@ -1089,6 +1204,23 @@ class TransparentWindow(Adw.Window):
         if self.active_settings_popover is not None:
             self.active_settings_popover.set_opacity(1.0 if visible else 0.0)
             self.active_settings_popover.set_can_target(visible)
+
+    def _set_external_settings_windows_visible(self, visible: bool) -> None:
+        for window in list(self._external_settings_windows.values()):
+            try:
+                window.set_visible(visible)
+            except Exception as exc:
+                logger.error("Failed to toggle external settings window: %s", exc)
+
+    def _set_mapping_ui_visible(self, visible: bool) -> None:
+        if self.fixed.get_visible() == visible:
+            return
+        self.fixed.set_visible(visible)
+        self.circle_overlay.set_visible(visible)
+        if visible:
+            self.right_click_overlay.set_visible(bool(self.right_click_overlay.widgets))
+        else:
+            self.right_click_overlay.set_visible(True)
 
     def _set_mask_interactive(self, interactive: bool) -> None:
         if self.active_mask_layer is None:
@@ -2097,16 +2229,21 @@ class TransparentWindow(Adw.Window):
 
 
 class KeyMapper(Adw.Application):
-    def __init__(self, display_name: str):
+    def __init__(self, display_name: str, host_display_name: str | None):
         # 将 display_name 转换为有效的 application ID 格式
         # 替换无效字符并确保符合 D-Bus 规范
         sanitized_display = display_name.replace(":", "_").replace("/", "_").replace("-", "_")
         super().__init__(application_id=f"com.jaoushingan.WaydroidHelper.KeyMapper.{sanitized_display}")
         self.display_name = display_name
+        self.host_display_name = host_display_name
         self.window = None
 
     def do_activate(self):
-        self.window = TransparentWindow(self, self.display_name)
+        self.window = TransparentWindow(
+            self,
+            self.display_name,
+            host_display_name=self.host_display_name,
+        )
         self.window.present()
     
         # 捕获 SIGTERM
@@ -2124,9 +2261,9 @@ class KeyMapper(Adw.Application):
         asyncio.create_task(self._do_shutdown())
         return True
 
-def create_keymapper(display_name: str):
+def create_keymapper(display_name: str, host_display_name: str | None = None):
     asyncio.set_event_loop_policy(
         GLibEventLoopPolicy()  # pyright:ignore[reportUnknownArgumentType]
     )
-    app = KeyMapper(display_name)
+    app = KeyMapper(display_name, host_display_name)
     app.run()
