@@ -580,16 +580,12 @@ class InstanceDetailPage(NavigationPage):
 
             # 直接打开窗口
             if self._app:
-                host_display_name = self.get_display().get_name()
                 if self.config.cage.enabled:
                     display_name = self.config.cage.socket_name
                 else:
-                    display_name = host_display_name
-                self.keymapper_proc = multiprocessing.get_context('spawn').Process(
-                    target=create_keymapper,
-                    args=(display_name, host_display_name),
-                    name=f"KeyMapper-{display_name}",
-                )
+                    display_name = self.get_display().get_name()
+                self.keymapper_proc = multiprocessing.get_context('spawn').Process(target=create_keymapper,
+                                                                    args=(display_name,), name=f"KeyMapper-{display_name}")
                 self.keymapper_proc.start()
 
                 async def watch_process(p):
