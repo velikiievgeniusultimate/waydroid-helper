@@ -566,7 +566,7 @@ class InstanceDetailPage(NavigationPage):
                 hide_titlebar_flag = "--hide-titlebar" if self.config.cage.hide_titlebar else ""
                 confine_pointer_flag = "--confine-pointer" if self.config.cage.confine_pointer else ""
                 await sm.run(
-                    f"{self.config.cage.executable_path} -W {width} -H {height} -w {logic_width} -h {logic_height} -S {socket_name} --scale {scale} --refresh-rate {refresh_rate} --allow-resize {hide_titlebar_flag} {confine_pointer_flag} -- waydroid show-full-ui",
+                    f"{self.config.cage.executable_path} -W {width} -H {height} -w {logic_width} -h {logic_height} -S {socket_name} --scale {scale} --refresh-rate {refresh_rate} {hide_titlebar_flag} {confine_pointer_flag} -- waydroid show-full-ui",
                     flag=True,
                     wait=False,
                 )
