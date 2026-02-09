@@ -19,6 +19,8 @@ class ScreenInfo:
     host_height: int = 0
     width: int = 0
     height: int = 0
+    cursor_x: int | None = None
+    cursor_y: int | None = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -38,6 +40,15 @@ class ScreenInfo:
     
     def get_host_resolution(self) -> tuple[int, int]:
         return self.host_width, self.host_height
+
+    def set_cursor_position(self, x: int, y: int) -> None:
+        self.cursor_x = x
+        self.cursor_y = y
+
+    def get_cursor_position(self) -> tuple[int, int] | None:
+        if self.cursor_x is None or self.cursor_y is None:
+            return None
+        return (self.cursor_x, self.cursor_y)
 
 
 # 全局单例实例，避免重复创建
