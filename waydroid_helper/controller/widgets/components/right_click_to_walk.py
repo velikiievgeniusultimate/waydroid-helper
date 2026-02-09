@@ -165,9 +165,8 @@ class RightClickToWalk(BaseWidget):
         # 点按/长按检测
         self._key_press_start_time: float = 0.0
         self._is_long_press: bool = False
-        self._long_press_threshold: float = 0.12  # 120ms 区分点按和长按
+        self._long_press_threshold: float = 0.3  # 300ms 区分点按和长按
         self._key_is_currently_pressed: bool = False  # 跟踪右键是否仍然按下
-        self._last_mouse_position: tuple[float, float] | None = None
 
         # 边界保持系统
         self._hold_timer: int | None = None
@@ -496,21 +495,6 @@ class RightClickToWalk(BaseWidget):
 
     def _update_smooth_move(self) -> bool:
         """平滑移动的定时器回调"""
-        if self._last_mouse_position is not None and self._should_follow_cursor(time.time()):
-            window_center_x, window_center_y = self._get_window_center()
-            mouse_x, mouse_y = self._last_mouse_position
-            widget_radius = self.width / 2
-            self._target_position = self._get_target_position(
-                self.center_x,
-                self.center_y,
-                widget_radius,
-                window_center_x,
-                window_center_y,
-                mouse_x,
-                mouse_y,
-            )
-            self._locked_target_position = None
-
         if self._move_steps_count < self._move_steps_total:
             dx = self._target_position[0] - self._current_position[0]
             dy = self._target_position[1] - self._current_position[1]
@@ -691,7 +675,6 @@ class RightClickToWalk(BaseWidget):
 
         # 获取鼠标位置和窗口信息
         mouse_x, mouse_y = event.position
-        self._last_mouse_position = (mouse_x, mouse_y)
         window_center_x, window_center_y = self._get_window_center()
 
         is_click_event = event.event_type == "mouse_press"
