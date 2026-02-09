@@ -58,6 +58,7 @@ class CircleOverlay(Gtk.DrawingArea):
     def __init__(self):
         super().__init__()
         self.circle_data = None
+        self.content_geometry: tuple[int, int, int, int] | None = None
         self.set_draw_func(self._draw_circle, None)
 
     def set_circle_data(self, data):
@@ -65,10 +66,22 @@ class CircleOverlay(Gtk.DrawingArea):
         self.circle_data = data
         self.queue_draw()
 
+    def set_content_geometry(self, offset_x: int, offset_y: int, width: int, height: int) -> None:
+        self.content_geometry = (offset_x, offset_y, width, height)
+        self.queue_draw()
+
     def _draw_circle(self, widget, cr, width, height, user_data):
         """Draws a circle"""
         if not self.circle_data:
             return
+        if self.content_geometry:
+            offset_x, offset_y, content_width, content_height = self.content_geometry
+            cr.save()
+            cr.translate(offset_x, offset_y)
+            cr.rectangle(0, 0, content_width, content_height)
+            cr.clip()
+            width = content_width
+            height = content_height
 
         # Get circle parameters
         circle_radius = self.circle_data.get("circle_radius", 200)
@@ -88,6 +101,8 @@ class CircleOverlay(Gtk.DrawingArea):
             cr.set_line_width(3)
             cr.arc(center_x, center_y, circle_radius, 0, 2 * math.pi)
             cr.stroke()
+            if self.content_geometry:
+                cr.restore()
             return
 
         ellipse_radius_x = self.circle_data.get("ellipse_radius_x")
@@ -144,6 +159,8 @@ class CircleOverlay(Gtk.DrawingArea):
             cr.move_to(math_center_x, math_center_y - ellipse_crosshair)
             cr.line_to(math_center_x, math_center_y + ellipse_crosshair)
             cr.stroke()
+        if self.content_geometry:
+            cr.restore()
 
 
 class RightClickToWalkOverlay(Gtk.DrawingArea):
@@ -160,6 +177,7 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.drag_point: str | None = None
         self.drag_start_offset: tuple[int, int] | float | None = None
         self.drag_kind: str | None = None
+        self.content_geometry: tuple[int, int, int, int] | None = None
         self.set_draw_func(self._draw_overlay, None)
         self.set_can_target(False)
         self.set_visible(False)
@@ -229,6 +247,10 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
         self.cursor_position = position
         if self.get_visible():
             self.queue_draw()
+
+    def set_content_geometry(self, offset_x: int, offset_y: int, width: int, height: int) -> None:
+        self.content_geometry = (offset_x, offset_y, width, height)
+        self.queue_draw()
 
     def handle_edit_mouse_pressed(self, x: float, y: float, button: int) -> bool:
         if button != Gdk.BUTTON_PRIMARY:
@@ -530,6 +552,14 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
     def _draw_overlay(self, widget, cr, width, height, user_data):
         if not self.widgets:
             return
+        if self.content_geometry:
+            offset_x, offset_y, content_width, content_height = self.content_geometry
+            cr.save()
+            cr.translate(offset_x, offset_y)
+            cr.rectangle(0, 0, content_width, content_height)
+            cr.clip()
+            width = content_width
+            height = content_height
 
         is_calibrating = False
         if self.active_widget is not None:
@@ -567,6 +597,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
                         if angle_data is not None:
                             self._draw_angle_warp_overlay(cr, center_widget, angle_data)
                             self._draw_angle_warp_debug(cr, angle_data)
+            if self.content_geometry:
+                cr.restore()
             return
 
         if is_calibrating or tuning_active:
@@ -575,6 +607,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.fill()
 
         if not (self.active_widget and is_calibrating) and not tuning_active:
+            if self.content_geometry:
+                cr.restore()
             return
 
         if is_calibrating and self.cursor_position is not None:
@@ -678,6 +712,8 @@ class RightClickToWalkOverlay(Gtk.DrawingArea):
             cr.show_text(f"Corrected angle: {corrected_angle_text}")
             cr.move_to(margin, margin + line_height * 3)
             cr.show_text(f"X Gain: {x_gain:.2f}  Y Gain: {y_gain:.2f}")
+        if self.content_geometry:
+            cr.restore()
 
 
 class TransparentWindow(Adw.Window):
@@ -721,9 +757,44 @@ class TransparentWindow(Adw.Window):
         self.overlay = overlay
         self.set_content(overlay)
 
+        self.root_fixed = Gtk.Fixed.new()
+        self.root_fixed.set_name("root-layout")
+        overlay.set_child(self.root_fixed)
+
+        self.bars_fixed = Gtk.Fixed.new()
+        self.bars_fixed.set_name("fullscreen-bars")
+        self.bars_fixed.set_visible(False)
+        self.root_fixed.put(self.bars_fixed, 0, 0)
+
+        self.bar_top = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self.bar_top.add_css_class("black-bar")
+        self.bar_top.set_can_target(False)
+        self.bars_fixed.put(self.bar_top, 0, 0)
+
+        self.bar_bottom = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self.bar_bottom.add_css_class("black-bar")
+        self.bar_bottom.set_can_target(False)
+        self.bars_fixed.put(self.bar_bottom, 0, 0)
+
+        self.bar_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.bar_left.add_css_class("black-bar")
+        self.bar_left.set_can_target(False)
+        self.bars_fixed.put(self.bar_left, 0, 0)
+
+        self.bar_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self.bar_right.add_css_class("black-bar")
+        self.bar_right.set_can_target(False)
+        self.bars_fixed.put(self.bar_right, 0, 0)
+
         self.fixed = Gtk.Fixed.new()
         self.fixed.set_name("mapping-widget")
-        overlay.set_child(self.fixed)
+        self.root_fixed.put(self.fixed, 0, 0)
+
+        self._content_offset = (0, 0)
+        self._content_size = (0, 0)
+        self._is_fullscreen_mode = False
+        self._cursor_locked = False
+        self._last_pointer_position = (0.0, 0.0)
 
         self.event_bus = EventBus()
 
@@ -881,11 +952,16 @@ class TransparentWindow(Adw.Window):
                 motion_controller = Gtk.EventControllerMotion.new()
 
                 def on_mask_motion(_controller, x, y):
+                    normalized = self._normalize_input_position(x, y)
+                    if normalized is None:
+                        return
                     if (
                         self.right_click_overlay.active_widget is not None
                         and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
                     ):
-                        self.right_click_overlay.update_cursor((int(x), int(y)))
+                        self.right_click_overlay.update_cursor(
+                            (int(normalized[0]), int(normalized[1]))
+                        )
 
                 motion_controller.connect("motion", on_mask_motion)
                 mask_layer.add_controller(motion_controller)
@@ -1338,24 +1414,160 @@ class TransparentWindow(Adw.Window):
         """Sets window properties"""
         self.realize()
         self.set_decorated(False)
+        self.set_name("transparent-window")
         self.maximize()
 
-        self.set_name("transparent-window")
+    def _get_content_geometry(self) -> tuple[int, int, int, int]:
+        offset_x, offset_y = self._content_offset
+        content_w, content_h = self._content_size
+        return offset_x, offset_y, content_w, content_h
+
+    def _is_in_content(self, x: float, y: float) -> bool:
+        offset_x, offset_y, content_w, content_h = self._get_content_geometry()
+        if content_w <= 0 or content_h <= 0:
+            return False
+        return offset_x <= x < offset_x + content_w and offset_y <= y < offset_y + content_h
+
+    def _confine_pointer(self, x: float, y: float) -> tuple[float, float]:
+        offset_x, offset_y, content_w, content_h = self._get_content_geometry()
+        if content_w <= 0 or content_h <= 0:
+            return x, y
+        clamped_x = min(max(x, offset_x), offset_x + content_w - 1)
+        clamped_y = min(max(y, offset_y), offset_y + content_h - 1)
+        return clamped_x, clamped_y
+
+    def _normalize_input_position(self, x: float, y: float) -> tuple[float, float] | None:
+        self._last_pointer_position = (x, y)
+        in_content = self._is_in_content(x, y)
+        if self._cursor_locked:
+            if not in_content:
+                x, y = self._confine_pointer(x, y)
+                self._maybe_warp_pointer(x, y)
+            in_content = True
+        if not in_content:
+            return None
+        offset_x, offset_y = self._content_offset
+        return x - offset_x, y - offset_y
+
+    def _maybe_warp_pointer(self, x: float, y: float) -> None:
+        display = self.get_display()
+        if display is None:
+            return
+        seat = display.get_default_seat()
+        if seat is None:
+            return
+        pointer = seat.get_pointer()
+        if pointer is None:
+            return
+        for target in (display, self.get_surface()):
+            if target is None:
+                continue
+            try:
+                pointer.warp(target, int(x), int(y))
+                return
+            except Exception:
+                continue
+
+    def _update_cursor_grab(self) -> None:
+        display = self.get_display()
+        if display is None:
+            return
+        seat = display.get_default_seat()
+        if seat is None:
+            return
+        if self._cursor_locked:
+            surface = self.get_surface()
+            if surface is None:
+                return
+            grabbed = False
+            for args in (
+                (surface, Gdk.SeatCapabilities.POINTER, True, None, None, None),
+                (surface, Gdk.SeatCapabilities.POINTER, True, None, None),
+                (surface, Gdk.SeatCapabilities.POINTER, True, None),
+            ):
+                try:
+                    seat.grab(*args)
+                    grabbed = True
+                    break
+                except TypeError:
+                    continue
+                except Exception as exc:  # pragma: no cover - depends on backend
+                    logger.warning(f"Failed to grab pointer: {exc}")
+                    break
+            if not grabbed:
+                logger.warning("Pointer grab is not supported by the current backend.")
+        else:
+            try:
+                seat.ungrab()
+            except Exception as exc:  # pragma: no cover - depends on backend
+                logger.warning(f"Failed to ungrab pointer: {exc}")
+
+    def update_layout(self) -> None:
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        if width <= 0 or height <= 0:
+            return
+        self.root_fixed.set_size_request(width, height)
+        self.bars_fixed.set_size_request(width, height)
+        self.root_fixed.move(self.bars_fixed, 0, 0)
+
+        if self.is_fullscreen():
+            screen_info = ScreenInfo()
+            device_w, device_h = screen_info.get_resolution()
+            if device_w <= 0 or device_h <= 0:
+                device_w, device_h = screen_info.get_host_resolution()
+            if device_w <= 0 or device_h <= 0:
+                device_w, device_h = width, height
+
+            scale = min(width / device_w, height / device_h)
+            content_w = max(1, int(round(device_w * scale)))
+            content_h = max(1, int(round(device_h * scale)))
+            offset_x = max(0, (width - content_w) // 2)
+            offset_y = max(0, (height - content_h) // 2)
+        else:
+            content_w = width
+            content_h = height
+            offset_x = 0
+            offset_y = 0
+
+        self._content_offset = (offset_x, offset_y)
+        self._content_size = (content_w, content_h)
+
+        self.fixed.set_size_request(content_w, content_h)
+        self.root_fixed.move(self.fixed, offset_x, offset_y)
+
+        self.bars_fixed.move(self.bar_top, 0, 0)
+        self.bar_top.set_size_request(width, offset_y)
+
+        bottom_height = max(0, height - offset_y - content_h)
+        self.bars_fixed.move(self.bar_bottom, 0, offset_y + content_h)
+        self.bar_bottom.set_size_request(width, bottom_height)
+
+        self.bars_fixed.move(self.bar_left, 0, offset_y)
+        self.bar_left.set_size_request(offset_x, content_h)
+
+        right_width = max(0, width - offset_x - content_w)
+        self.bars_fixed.move(self.bar_right, offset_x + content_w, offset_y)
+        self.bar_right.set_size_request(right_width, content_h)
+
+        self._is_fullscreen_mode = self.is_fullscreen()
+        show_bars = self._is_fullscreen_mode and (offset_x > 0 or offset_y > 0)
+        self.bars_fixed.set_visible(show_bars)
+        self.circle_overlay.set_content_geometry(offset_x, offset_y, content_w, content_h)
+        self.right_click_overlay.set_content_geometry(offset_x, offset_y, content_w, content_h)
 
     def do_size_allocate(self, width:int, height:int, baseline:int):
         # Call parent's size_allocate first
         Adw.Window().do_size_allocate(self, width, height, baseline)
         sc = ScreenInfo()
-        if self.is_maximized() and sc.host_width == 0 and sc.host_height == 0:
+        if sc.host_width == 0 and sc.host_height == 0:
             width = self.get_allocated_width()
             height = self.get_allocated_height()
-            
             self.set_default_size(width, height)
-            self.set_size_request(width, height)
             sc.set_host_resolution(width, height)
-            self.fixed.set_size_request(width, height)
             self.set_resizable(False)
-            logger.info(f"Window maximized: {width} x {height}")
+            logger.info(f"Window size: {width} x {height}")
+        self.update_layout()
 
     def setup_ui(self):
         """Sets up the user interface"""
@@ -1414,6 +1626,10 @@ class TransparentWindow(Adw.Window):
     def on_window_mouse_pressed(self, controller, n_press, x, y):
         """Window-level mouse press event"""
         button = controller.get_current_button()
+        normalized = self._normalize_input_position(x, y)
+        if normalized is None:
+            return False
+        local_x, local_y = normalized
 
         # Use event handler chain in mapping mode
         if self.current_mode == self.MAPPING_MODE:
@@ -1426,8 +1642,13 @@ class TransparentWindow(Adw.Window):
                 event_type="mouse_press",
                 key=mouse_key,
                 button=button,
-                position=(int(x), int(y)),
-                raw_data={"controller": controller, "n_press": n_press, "x": x, "y": y},
+                position=(int(local_x), int(local_y)),
+                raw_data={
+                    "controller": controller,
+                    "n_press": n_press,
+                    "x": local_x,
+                    "y": local_y,
+                },
             )
 
             # Process with event handler chain
@@ -1438,32 +1659,36 @@ class TransparentWindow(Adw.Window):
 
         # Mouse event handling in edit mode
         if button == Gdk.BUTTON_SECONDARY:  # Right click
-            widget_at_position = self.workspace_manager.get_widget_at_position(x, y)
+            widget_at_position = self.workspace_manager.get_widget_at_position(local_x, local_y)
             if not widget_at_position:
                 # Right click on blank area, show create menu
-                self.menu_manager.show_widget_creation_menu(x, y, self.widget_factory)
+                self.menu_manager.show_widget_creation_menu(local_x, local_y, self.widget_factory)
             else:
                 # Right click on widget, call widget's right-click callback
                 local_x, local_y = self.workspace_manager.global_to_local_coords(
-                    widget_at_position, x, y
+                    widget_at_position, local_x, local_y
                 )
                 if hasattr(widget_at_position, "on_widget_right_clicked"):
                     widget_at_position.on_widget_right_clicked(local_x, local_y)
 
         elif button == Gdk.BUTTON_PRIMARY:  # Left click
-            if self.right_click_overlay.handle_edit_mouse_pressed(x, y, button):
+            if self.right_click_overlay.handle_edit_mouse_pressed(local_x, local_y, button):
                 return True
-            self.workspace_manager.handle_mouse_press(controller, n_press, x, y)
+            self.workspace_manager.handle_mouse_press(controller, n_press, local_x, local_y)
 
     def on_window_mouse_motion(self, controller, x, y):
         """Window-level mouse motion event"""
+        normalized = self._normalize_input_position(x, y)
+        if normalized is None:
+            return False
+        local_x, local_y = normalized
         if (
             self.right_click_overlay.active_widget is not None
             and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
         ):
-            self.right_click_overlay.update_cursor((int(x), int(y)))
+            self.right_click_overlay.update_cursor((int(local_x), int(local_y)))
         elif self.right_click_overlay.is_tuning_active:
-            self.right_click_overlay.update_cursor((int(x), int(y)))
+            self.right_click_overlay.update_cursor((int(local_x), int(local_y)))
 
         if self.current_mode == self.MAPPING_MODE:
             event = controller.get_current_event()
@@ -1484,10 +1709,10 @@ class TransparentWindow(Adw.Window):
 
             event = InputEvent(
                 event_type="mouse_motion",
-                position=(int(x), int(y)),
+                position=(int(local_x), int(local_y)),
                 key=mouse_key,
                 button=button,
-                raw_data={"controller": controller, "x": x, "y": y},
+                raw_data={"controller": controller, "x": local_x, "y": local_y},
             )
             # Skill casting and right-click walking
             self.event_bus.emit(Event(EventType.MOUSE_MOTION, self, event))
@@ -1495,10 +1720,10 @@ class TransparentWindow(Adw.Window):
             return
 
         # In edit mode, delegate to workspace_manager
-        self.right_click_overlay.update_cursor((int(x), int(y)))
-        if self.right_click_overlay.handle_edit_mouse_motion(x, y):
+        self.right_click_overlay.update_cursor((int(local_x), int(local_y)))
+        if self.right_click_overlay.handle_edit_mouse_motion(local_x, local_y):
             return
-        self.workspace_manager.handle_mouse_motion(controller, x, y)
+        self.workspace_manager.handle_mouse_motion(controller, local_x, local_y)
 
     def on_window_mouse_scroll(
         self,
@@ -1507,9 +1732,17 @@ class TransparentWindow(Adw.Window):
         dy: float | None = None,
     ):
         if self.current_mode == self.MAPPING_MODE:
+            event = controller.get_current_event()
+            if event is None:
+                return
+            pos = event.get_position()
+            normalized = self._normalize_input_position(pos.x, pos.y)
+            if normalized is None:
+                return
+            local_x, local_y = normalized
             event = InputEvent(
                 event_type="mouse_scroll",
-                raw_data={"controller": controller, "dx": dx, "dy": dy},
+                raw_data={"controller": controller, "dx": dx, "dy": dy, "x": local_x, "y": local_y},
             )
             self.event_handler_chain.process_event(event)
 
@@ -1625,6 +1858,10 @@ class TransparentWindow(Adw.Window):
     def on_window_mouse_released(self, controller, n_press, x, y):
         """Window-level mouse release event"""
         button = controller.get_current_button()
+        normalized = self._normalize_input_position(x, y)
+        if normalized is None:
+            return False
+        local_x, local_y = normalized
 
         # Use event handler chain in mapping mode
         if self.current_mode == self.MAPPING_MODE:
@@ -1637,8 +1874,13 @@ class TransparentWindow(Adw.Window):
                 event_type="mouse_release",
                 key=mouse_key,
                 button=button,
-                position=(int(x), int(y)),
-                raw_data={"controller": controller, "n_press": n_press, "x": x, "y": y},
+                position=(int(local_x), int(local_y)),
+                raw_data={
+                    "controller": controller,
+                    "n_press": n_press,
+                    "x": local_x,
+                    "y": local_y,
+                },
             )
 
             # Process with event handler chain
@@ -1650,7 +1892,7 @@ class TransparentWindow(Adw.Window):
         # Mouse release handling in edit mode, delegate to workspace_manager
         if self.right_click_overlay.handle_edit_mouse_released(button):
             return True
-        self.workspace_manager.handle_mouse_release(controller, n_press, x, y)
+        self.workspace_manager.handle_mouse_release(controller, n_press, local_x, local_y)
 
     def start_widget_drag(self, widget, x, y):
         """Starts dragging widget"""
@@ -1894,6 +2136,22 @@ class TransparentWindow(Adw.Window):
                 self.switch_mode(self.MAPPING_MODE)
             else:
                 self.switch_mode(self.EDIT_MODE)
+            return True
+        if keyval == Gdk.KEY_F10:
+            self._cursor_locked = not self._cursor_locked
+            self._update_cursor_grab()
+            state_label = _("Cursor Lock Enabled") if self._cursor_locked else _("Cursor Lock Disabled")
+            GLib.idle_add(self.show_notification, state_label)
+            return True
+        if keyval == Gdk.KEY_F11:
+            if self.is_fullscreen():
+                self.unfullscreen()
+                self._is_fullscreen_mode = False
+                self.maximize()
+            else:
+                self.fullscreen()
+                self._is_fullscreen_mode = True
+            self.update_layout()
             return True
         # elif keyval == Gdk.KEY_F2:
         #     self.switch_mode(self.MAPPING_MODE)
