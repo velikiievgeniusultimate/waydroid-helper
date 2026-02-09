@@ -445,6 +445,10 @@ class SkillCasting(BaseWidget):
             self._skill_state = SkillState.MOVING
             await self._smooth_move_to_target(self._target_position)
 
+            # 移动完成后同步当前鼠标位置，避免等待新移动事件
+            mapped_target = self._map_circle_to_circle(self._mouse_x, self._mouse_y)
+            await self._instant_move_to_target(mapped_target)
+
             # 移动完成后，检查是否有取消请求
             if self._cancel_target_position is not None:
                 # 有待处理的取消事件，开始取消施法移动
