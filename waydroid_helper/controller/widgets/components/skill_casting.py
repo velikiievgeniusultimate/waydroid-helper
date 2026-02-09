@@ -304,6 +304,12 @@ class SkillCasting(BaseWidget):
     def _on_mouse_motion(self, event):
         """鼠标移动事件回调 - 将事件放入队列"""
         # 窗口发送的 MOUSE_MOTION 事件包含 InputEvent 对象
+        if (
+            hasattr(event, "data")
+            and isinstance(event.data, InputEvent)
+            and event.data.button == Gdk.BUTTON_SECONDARY
+        ):
+            return
         if hasattr(event, "data") and hasattr(event.data, "position"):
             # 这是 InputEvent 对象
             position = event.data.position
@@ -2418,6 +2424,8 @@ class SkillCasting(BaseWidget):
     ):
         """按键触发事件处理 - 将事件放入异步队列"""
         if not event or not event.event_type:
+            return False
+        if event.event_type == "mouse_motion" and event.button == Gdk.BUTTON_SECONDARY:
             return False
 
         # 取消施法状态下不响应任何用户输入
