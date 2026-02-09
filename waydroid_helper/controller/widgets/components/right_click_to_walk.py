@@ -23,6 +23,7 @@ from waydroid_helper.controller.widgets.decorators import (Resizable,
                                                            ResizableDecorator)
 from waydroid_helper.controller.widgets.config import (
     create_action_config,
+    create_slider_config,
     create_switch_config,
     create_text_config,
 )
@@ -98,6 +99,8 @@ class RightClickToWalk(BaseWidget):
     APPLY_DIAGONALS_CONFIG_KEY = "apply_diagonals"
     RESET_DIAGONALS_CONFIG_KEY = "reset_diagonals"
     SHOW_DEBUG_BOUNDARY_CONFIG_KEY = "show_debug_boundary"
+    PRESS_TIME_CONFIG_KEY = "press_time_ms"
+    PRESS_TIME_DEFAULT_MS = 200
     GAIN_DEFAULT = 1.0
     GAIN_MIN = 0.5
     GAIN_MAX = 2.0
@@ -165,8 +168,11 @@ class RightClickToWalk(BaseWidget):
         # 点按/长按检测
         self._key_press_start_time: float = 0.0
         self._is_long_press: bool = False
-        self._long_press_threshold: float = 0.3  # 300ms 区分点按和长按
+        self._long_press_threshold: float = self.PRESS_TIME_DEFAULT_MS / 1000
         self._key_is_currently_pressed: bool = False  # 跟踪右键是否仍然按下
+        self._last_mouse_position: tuple[float, float] | None = None
+        self._press_time_adjustment: Gtk.Adjustment | None = None
+        self._press_time_adjustment_updating: bool = False
 
         # 边界保持系统
         self._hold_timer: int | None = None
@@ -495,6 +501,21 @@ class RightClickToWalk(BaseWidget):
 
     def _update_smooth_move(self) -> bool:
         """平滑移动的定时器回调"""
+        if self._last_mouse_position is not None and self._should_follow_cursor(time.time()):
+            window_center_x, window_center_y = self._get_window_center()
+            mouse_x, mouse_y = self._last_mouse_position
+            widget_radius = self.width / 2
+            self._target_position = self._get_target_position(
+                self.center_x,
+                self.center_y,
+                widget_radius,
+                window_center_x,
+                window_center_y,
+                mouse_x,
+                mouse_y,
+            )
+            self._locked_target_position = None
+
         if self._move_steps_count < self._move_steps_total:
             dx = self._target_position[0] - self._current_position[0]
             dy = self._target_position[1] - self._current_position[1]
@@ -675,6 +696,7 @@ class RightClickToWalk(BaseWidget):
 
         # 获取鼠标位置和窗口信息
         mouse_x, mouse_y = event.position
+        self._last_mouse_position = (mouse_x, mouse_y)
         window_center_x, window_center_y = self._get_window_center()
 
         is_click_event = event.event_type == "mouse_press"
@@ -802,6 +824,18 @@ class RightClickToWalk(BaseWidget):
 
     def setup_config(self) -> None:
         """设置右键行走的配置项"""
+        press_time_config = create_slider_config(
+            key=self.PRESS_TIME_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Press Time (ms)"),
+            value=float(self.PRESS_TIME_DEFAULT_MS),
+            min_value=50,
+            max_value=1000,
+            step=10,
+            description=pgettext(
+                "Controller Widgets",
+                "Time threshold in milliseconds to treat a press as a long press.",
+            ),
+        )
         calibrate_center_config = create_action_config(
             key=self.CALIBRATE_CENTER_CONFIG_KEY,
             label=pgettext("Controller Widgets", "Center Calibration"),
@@ -1203,6 +1237,7 @@ class RightClickToWalk(BaseWidget):
             ),
         )
 
+        self.add_config_item(press_time_config)
         self.add_config_item(calibrate_center_config)
         # reset_center_config intentionally not added (UI removed)
         self.add_config_item(center_x_config)
@@ -1294,11 +1329,15 @@ class RightClickToWalk(BaseWidget):
         self.add_config_change_callback(
             self.SHOW_DEBUG_BOUNDARY_CONFIG_KEY, self._on_debug_boundary_changed
         )
+        self.add_config_change_callback(
+            self.PRESS_TIME_CONFIG_KEY, self._on_press_time_changed
+        )
         self._sync_center_inputs()
         self._sync_gain_inputs()
         self._sync_anchor_inputs()
         self._ensure_diagonal_defaults()
         self._sync_diagonal_inputs()
+        self._apply_press_time_ms(self.get_config_value(self.PRESS_TIME_CONFIG_KEY))
         self._set_gain_controls_visible(self._is_gain_enabled())
         self._set_anchor_controls_visible(not self.mapping_mode)
         self._set_diagonal_controls_visible(
@@ -1360,6 +1399,8 @@ class RightClickToWalk(BaseWidget):
             for key in keys:
                 if key in (self.CENTER_X_INPUT_CONFIG_KEY, self.CENTER_Y_INPUT_CONFIG_KEY):
                     widget = self._build_center_input_control(config_manager, key)
+                elif key == self.PRESS_TIME_CONFIG_KEY:
+                    widget = self._build_press_time_control(config_manager, key)
                 else:
                     widget = config_manager.create_ui_widget_for_key(key)
                 if widget is None:
@@ -1371,6 +1412,18 @@ class RightClickToWalk(BaseWidget):
                     box.append(widget)
             expander.set_child(box)
             return expander
+
+        panel.append(
+            build_section(
+                pgettext("Controller Widgets", "Input Timing"),
+                [self.PRESS_TIME_CONFIG_KEY],
+                description=pgettext(
+                    "Controller Widgets",
+                    "Adjust how long a press must be held to be treated as a long press.",
+                ),
+                expanded=True,
+            )
+        )
 
         panel.append(
             build_section(
@@ -1816,6 +1869,57 @@ class RightClickToWalk(BaseWidget):
         box.set_visible(True)
         return box
 
+    def _build_press_time_control(self, config_manager, key: str) -> Gtk.Widget:
+        config = config_manager.get_config(key)
+        label_text = config.label if config is not None else key
+        description = config.description if config is not None else ""
+        min_value = config.min_value if config is not None else 50
+        max_value = config.max_value if config is not None else 1000
+        step = config.step if config is not None else 10
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        label = Gtk.Label(label=label_text, xalign=0)
+        if description:
+            label.set_tooltip_text(description)
+        box.append(label)
+
+        initial_value = self.get_config_value(key)
+        if initial_value is None:
+            initial_value = float(self.PRESS_TIME_DEFAULT_MS)
+
+        adjustment = Gtk.Adjustment(
+            value=float(initial_value),
+            lower=float(min_value),
+            upper=float(max_value),
+            step_increment=float(step),
+            page_increment=float(step) * 10,
+        )
+        self._press_time_adjustment = adjustment
+
+        spin = Gtk.SpinButton()
+        spin.set_adjustment(adjustment)
+        spin.set_digits(0)
+        spin.set_numeric(True)
+        spin.set_width_chars(6)
+        spin.set_increments(int(step), int(step) * 10)
+
+        def on_value_changed(_adjustment):
+            if self._press_time_adjustment_updating:
+                return
+            value = int(round(adjustment.get_value()))
+            value = max(int(min_value), min(int(max_value), value))
+            self._press_time_adjustment_updating = True
+            try:
+                adjustment.set_value(value)
+            finally:
+                self._press_time_adjustment_updating = False
+            self.set_config_value(key, value)
+
+        adjustment.connect("value-changed", on_value_changed)
+        box.append(spin)
+        box.set_visible(True)
+        return box
+
     def _get_center_adjustment_initial_value(self, key: str) -> int:
         calibrated = self._get_calibrated_center()
         if calibrated is None:
@@ -1825,6 +1929,23 @@ class RightClickToWalk(BaseWidget):
         if key == self.CENTER_Y_INPUT_CONFIG_KEY:
             return int(calibrated[1])
         return 0
+
+    def _apply_press_time_ms(self, value: float | int | None) -> None:
+        try:
+            press_time_ms = float(value)
+        except (TypeError, ValueError):
+            press_time_ms = float(self.PRESS_TIME_DEFAULT_MS)
+        press_time_ms = max(50.0, min(1000.0, press_time_ms))
+        self._long_press_threshold = press_time_ms / 1000
+        if self._press_time_adjustment is not None and not self._press_time_adjustment_updating:
+            self._press_time_adjustment_updating = True
+            try:
+                self._press_time_adjustment.set_value(press_time_ms)
+            finally:
+                self._press_time_adjustment_updating = False
+
+    def _on_press_time_changed(self, _key: str, value: float, _restoring: bool) -> None:
+        self._apply_press_time_ms(value)
 
     def _sync_gain_inputs(self) -> None:
         x_gain, y_gain = self._get_saved_gains()
