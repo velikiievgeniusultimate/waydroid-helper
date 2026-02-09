@@ -31,7 +31,3 @@ extract_description.py
 CLAUDE.md
 .serena/
 .cursor/
-tools/output_management_client/wlr-output-management-unstable-v1.xml
-tools/output_management_client/wlr-output-management-unstable-v1-client-protocol.h
-tools/output_management_client/wlr-output-management-unstable-v1-protocol.c
-tools/output_management_client/output-management-client
