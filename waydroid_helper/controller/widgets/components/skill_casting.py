@@ -315,7 +315,9 @@ class SkillCasting(BaseWidget):
             # 这是字典格式的事件数据
             position = event.data["position"]
         else:
-            return
+            position = self.screen_info.get_cursor_position()
+            if position is None:
+                return
 
         skill_event = SkillEvent(
             type="mouse_motion", data={"position": position, "timestamp": time.time()}

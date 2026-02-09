@@ -1457,6 +1457,7 @@ class TransparentWindow(Adw.Window):
 
     def on_window_mouse_motion(self, controller, x, y):
         """Window-level mouse motion event"""
+        ScreenInfo().set_cursor_position(int(x), int(y))
         if (
             self.right_click_overlay.active_widget is not None
             and getattr(self.right_click_overlay.active_widget, "is_calibrating", False)
