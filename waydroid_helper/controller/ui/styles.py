@@ -18,15 +18,6 @@ CSS_TRANSPARENT = """
 #mapping-widget {
     background-color: rgba(0, 0, 0, 0);
 }
-#root-layout {
-    background-color: rgba(0, 0, 0, 0);
-}
-#fullscreen-bars {
-    background-color: rgba(0, 0, 0, 0);
-}
-.black-bar {
-    background-color: rgba(0, 0, 0, 1);
-}
 #mode-notification-box {
     background-color: rgba(0, 0, 0, 0.7);
     border-radius: 10px;
