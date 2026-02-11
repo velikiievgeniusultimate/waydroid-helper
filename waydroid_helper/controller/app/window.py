@@ -1063,8 +1063,11 @@ class TransparentWindow(Adw.Window):
         from waydroid_helper.controller.widgets.components.right_click_to_walk import (
             RightClickToWalk,
         )
+        from waydroid_helper.controller.widgets.components.skill_casting import (
+            SkillCasting,
+        )
 
-        if not isinstance(widget, RightClickToWalk):
+        if not isinstance(widget, (RightClickToWalk, SkillCasting)):
             return False
 
         existing_window = self._external_settings_windows.get(widget)
