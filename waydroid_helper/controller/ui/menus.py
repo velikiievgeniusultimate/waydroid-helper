@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import gi
-from gi.repository import Gdk, Gtk, GLib
+from gi.repository import Adw, Gdk, Gtk, GLib
 
 from waydroid_helper.controller.core.control_msg import ScreenInfo
 from waydroid_helper.controller.core.key_system import Key, KeyCombination, KeyRegistry
@@ -24,6 +24,7 @@ from waydroid_helper.config.file_manager import ConfigManager as FileConfigManag
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
 
 if TYPE_CHECKING:
     from waydroid_helper.controller.app.window import TransparentWindow
@@ -45,6 +46,7 @@ class ContextMenuManager:
         self.screen_info = ScreenInfo()
         self._config_manager = FileConfigManager()
         self._current_profile = self._load_current_profile()
+        self._profile_manager_window: "Adw.Window | None" = None
 
     def show_widget_creation_menu(
         self, x: int, y: int, widget_factory: "WidgetFactory"
@@ -608,13 +610,26 @@ class ContextMenuManager:
         return self.DEFAULT_PROFILE_NAME
 
     def _show_profile_manager(self, widget_factory: "WidgetFactory") -> None:
+        if self._open_external_profile_manager_window(widget_factory):
+            return
+
         dialog = Gtk.Dialog(title=_("Profile Manager"), transient_for=self.parent_window)
         dialog.set_modal(True)
         dialog.set_default_size(360, 260)
         dialog.add_button(_("Close"), Gtk.ResponseType.CLOSE)
 
         content = dialog.get_content_area()
-        content.set_spacing(12)
+        profile_content = self._build_profile_manager_content(widget_factory)
+        content.append(profile_content)
+
+        def on_dialog_close(_dialog, _response_id):
+            dialog.destroy()
+
+        dialog.connect("response", on_dialog_close)
+        dialog.show()
+
+    def _build_profile_manager_content(self, widget_factory: "WidgetFactory") -> Gtk.Box:
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         content.set_margin_top(12)
         content.set_margin_bottom(12)
         content.set_margin_start(12)
@@ -681,9 +696,6 @@ class ContextMenuManager:
         )
         content.append(rename_button)
 
-        def on_dialog_close(_dialog, _response_id):
-            dialog.destroy()
-
         def refresh_profiles():
             updated_profiles = self._list_profiles()
             selected = self._current_profile
@@ -697,5 +709,83 @@ class ContextMenuManager:
         rename_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
         switch_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
 
-        dialog.connect("response", on_dialog_close)
-        dialog.show()
+        return content
+
+    def _open_external_profile_manager_window(self, widget_factory: "WidgetFactory") -> bool:
+        if self._profile_manager_window is not None:
+            self._profile_manager_window.present()
+            return True
+
+        host_display_name = getattr(self.parent_window, "_host_display_name", None)
+        if not host_display_name:
+            return False
+
+        display = Gdk.Display.open(host_display_name)
+        if display is None:
+            logger.error(
+                "Failed to open host display for profile manager window: %s",
+                host_display_name,
+            )
+            return False
+
+        try:
+            window = Adw.Window(application=self.parent_window.get_application())
+            window.set_display(display)
+            window.set_title(_("Profile Manager"))
+            if hasattr(window, "set_resizable"):
+                window.set_resizable(True)
+            if hasattr(window, "set_decorated"):
+                window.set_decorated(True)
+            window.set_default_size(420, 420)
+
+            header_bar = Gtk.HeaderBar()
+            header_bar.set_show_title_buttons(False)
+            header_bar.set_title_widget(Gtk.Label(label=_("Profile Manager")))
+
+            minimize_button = Gtk.Button.new()
+            minimize_button.set_icon_name("window-minimize-symbolic")
+            minimize_button.add_css_class("flat")
+            minimize_button.add_css_class("dim-label")
+            minimize_button.connect(
+                "clicked",
+                lambda _button: window.minimize()
+                if hasattr(window, "minimize")
+                else window.set_visible(False),
+            )
+
+            close_button = Gtk.Button.new()
+            close_button.set_icon_name("window-close-symbolic")
+            close_button.add_css_class("flat")
+            close_button.add_css_class("destructive-action")
+            close_button.connect("clicked", lambda _button: window.close())
+
+            header_bar.pack_end(minimize_button)
+            header_bar.pack_end(close_button)
+
+            title_handle = Gtk.WindowHandle()
+            title_handle.set_child(header_bar)
+
+            scrolled = Gtk.ScrolledWindow()
+            scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scrolled.set_hexpand(True)
+            scrolled.set_vexpand(True)
+            scrolled.set_child(self._build_profile_manager_content(widget_factory))
+
+            content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            content_box.set_hexpand(True)
+            content_box.set_vexpand(True)
+            content_box.append(title_handle)
+            content_box.append(scrolled)
+            window.set_content(content_box)
+
+            def on_window_close(_window):
+                self._profile_manager_window = None
+                return False
+
+            window.connect("close-request", on_window_close)
+            self._profile_manager_window = window
+            window.present()
+            return True
+        except Exception as exc:
+            logger.error("Failed to open external profile manager window: %s", exc)
+            return False
