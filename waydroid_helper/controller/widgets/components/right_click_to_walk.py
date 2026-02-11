@@ -2118,6 +2118,17 @@ class RightClickToWalk(BaseWidget):
         box.set_margin_end(6)
         popover.set_child(box)
 
+        settings_button = Gtk.Button(label=pgettext("Controller Widgets", "Settings"))
+
+        def on_settings_clicked(_button):
+            self.event_bus.emit(
+                Event(EventType.SETTINGS_WIDGET, self, self.SETTINGS_PANEL_AUTO_HIDE)
+            )
+            popover.popdown()
+
+        settings_button.connect("clicked", on_settings_clicked)
+        box.append(settings_button)
+
         copy_button = Gtk.Button(label=pgettext("Controller Widgets", "Copy widget"))
 
         def on_copy_clicked(_button):
@@ -2149,6 +2160,16 @@ class RightClickToWalk(BaseWidget):
         copy_button.connect("clicked", on_copy_clicked)
         box.append(copy_button)
 
+        delete_button = Gtk.Button(label=pgettext("Controller Widgets", "Delete"))
+        delete_button.add_css_class("destructive-action")
+
+        def on_delete_clicked(_button):
+            self.event_bus.emit(Event(EventType.DELETE_WIDGET, self, self))
+            popover.popdown()
+
+        delete_button.connect("clicked", on_delete_clicked)
+        box.append(delete_button)
+
         rect = Gdk.Rectangle()
         rect.x = int(self.x + x)
         rect.y = int(self.y + y)
@@ -2157,6 +2178,20 @@ class RightClickToWalk(BaseWidget):
         popover.set_pointing_to(rect)
         popover.popup()
         return True
+
+    def draw_selection_indicators(self, cr: "Context[Surface]", width: int, height: int):
+        """Only show border while selected."""
+        if self.is_selected:
+            self.draw_selection_border(cr, width, height)
+
+
+    def is_point_in_settings_button(self, x: int | float, y: int | float) -> bool:
+        """Disable settings gear action for this widget."""
+        return False
+
+    def is_point_in_delete_button(self, x: int | float, y: int | float) -> bool:
+        """Disable top-right delete action for this widget."""
+        return False
 
     def handle_calibration_click(self, x: float, y: float, _button: int) -> bool:
         if not self._calibration_mode:
