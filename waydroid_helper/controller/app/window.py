@@ -785,7 +785,6 @@ class TransparentWindow(Adw.Window):
 
         self.pointer_id_manager = PointerIdManager()
         self.key_registry = KeyRegistry()
-        self.menu_manager.reload_profile_hotkey()
         self.key_mapping_manager = KeyMappingManager(self.event_bus)
         # Create global event handler chain
         self.event_handler_chain = InputEventHandlerChain()
@@ -1814,7 +1813,6 @@ class TransparentWindow(Adw.Window):
         # Place component directly at the specified position
         self.fixed_put(widget, x, y)
 
-
         # Check if it's a multi-key mapping component (e.g., DirectionalPad)
         if hasattr(widget, "get_all_key_mappings"):
             # Register all keys for multi-key mapping components
@@ -1892,11 +1890,6 @@ class TransparentWindow(Adw.Window):
             if callable(cancel_anchor_set):
                 cancel_anchor_set()
                 return True
-
-        if self.menu_manager.handle_profile_hotkey_press(
-            keyval, keycode, state, self.widget_factory
-        ):
-            return True
 
         # Special keys: mode switching and debug functions - these are directly judged by original keyval
         if keyval == Gdk.KEY_F1:
