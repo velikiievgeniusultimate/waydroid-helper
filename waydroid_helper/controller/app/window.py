@@ -1891,6 +1891,11 @@ class TransparentWindow(Adw.Window):
                 cancel_anchor_set()
                 return True
 
+        if self.menu_manager.handle_profile_hotkey_press(
+            keyval, keycode, state, self.widget_factory
+        ):
+            return True
+
         # Special keys: mode switching and debug functions - these are directly judged by original keyval
         if keyval == Gdk.KEY_F1:
             # F1 switches between two modes
