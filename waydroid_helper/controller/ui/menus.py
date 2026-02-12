@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import gi
-from gi.repository import Adw, Gdk, Gtk, GLib
+from gi.repository import Adw, Gdk, Gtk, GLib, Pango, GObject
 
 from waydroid_helper.controller.core.control_msg import ScreenInfo
 from waydroid_helper.controller.core.key_system import Key, KeyCombination, KeyRegistry
@@ -270,8 +271,16 @@ class ContextMenuManager:
         return Path(self._get_profiles_dir()) / f"{self.CURRENT_PROFILE_STATE_NAME}.json"
 
     def _write_current_profile_state(self, profile_name: str) -> None:
+        ordered_profiles = [
+            name
+            for name in self._get_profile_order()
+            if name and name != self.CURRENT_PROFILE_STATE_NAME
+        ]
         state_path = self._current_profile_state_path()
-        payload = {"current_profile": profile_name}
+        payload = {
+            "current_profile": profile_name,
+            "profile_order": ordered_profiles,
+        }
         temp_path = state_path.with_suffix(".tmp")
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -281,9 +290,42 @@ class ContextMenuManager:
             logger.error(f"Failed to save profile state: {e}")
 
     def _load_current_profile(self) -> str:
+        state_path = self._current_profile_state_path()
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                saved_profile = self._normalize_profile_name(
+                    data.get("current_profile", "")
+                )
+                if saved_profile:
+                    return saved_profile
+            except Exception as e:
+                logger.error(f"Failed to load profile state: {e}")
+
         profile = self.DEFAULT_PROFILE_NAME
         self._write_current_profile_state(profile)
         return profile
+
+    def _get_profile_order(self) -> list[str]:
+        state_path = self._current_profile_state_path()
+        if not state_path.exists():
+            return []
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            stored_order = data.get("profile_order")
+            if isinstance(stored_order, list):
+                return [
+                    name
+                    for name in stored_order
+                    if isinstance(name, str)
+                    and name
+                    and name != self.CURRENT_PROFILE_STATE_NAME
+                ]
+        except Exception as e:
+            logger.error(f"Failed to load profile order: {e}")
+        return []
 
     def _set_current_profile(self, profile_name: str) -> None:
         self._current_profile = profile_name
@@ -307,7 +349,33 @@ class ContextMenuManager:
             if path.is_file() and path.stem != self.CURRENT_PROFILE_STATE_NAME
         }
         profile_names.add(self.DEFAULT_PROFILE_NAME)
-        return sorted(profile_names)
+
+        saved_order = self._get_profile_order()
+        ordered = [name for name in saved_order if name in profile_names]
+        ordered.extend(name for name in sorted(profile_names) if name not in ordered)
+        return ordered
+
+    def _save_profile_order(self, ordered_profiles: list[str]) -> None:
+        existing_profiles = set(self._list_profiles())
+        sanitized = [
+            name for name in ordered_profiles if name in existing_profiles and name
+        ]
+        for name in self._list_profiles():
+            if name not in sanitized:
+                sanitized.append(name)
+
+        state_path = self._current_profile_state_path()
+        payload = {
+            "current_profile": self._current_profile,
+            "profile_order": sanitized,
+        }
+        temp_path = state_path.with_suffix(".tmp")
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            os.replace(temp_path, state_path)
+        except Exception as e:
+            logger.error(f"Failed to save profile order: {e}")
 
     def _build_layout_data(self) -> dict[str, Any]:
         """Collect layout data from current widgets."""
@@ -589,44 +657,203 @@ class ContextMenuManager:
             _("Profile renamed to: %s") % normalized_new
         )
 
-    def _refresh_profile_dropdown(
-        self, dropdown: Gtk.DropDown, profile_names: list[str], selected: str
-    ) -> None:
-        string_list = Gtk.StringList()
-        for name in profile_names:
-            string_list.append(name)
-        dropdown.set_model(string_list)
-        if selected in profile_names:
-            dropdown.set_selected(profile_names.index(selected))
+    def _delete_profile(self, profile_name: str) -> None:
+        normalized = self._normalize_profile_name(profile_name)
+        if not normalized:
+            self.parent_window.show_notification(_("Profile name cannot be empty"))
+            return
+        if normalized == self.DEFAULT_PROFILE_NAME:
+            self.parent_window.show_notification(_("Default profile cannot be deleted"))
+            return
 
-    def _get_selected_profile_name(self, dropdown: Gtk.DropDown) -> str:
-        selected_item = dropdown.get_selected_item()
-        if isinstance(selected_item, Gtk.StringObject):
-            return selected_item.get_string()
-        profile_names = self._list_profiles()
-        selected_index = dropdown.get_selected()
-        if 0 <= selected_index < len(profile_names):
-            return profile_names[selected_index]
-        return self.DEFAULT_PROFILE_NAME
+        profile_path = self._profile_path(normalized)
+        if not profile_path.exists():
+            self.parent_window.show_notification(_("Profile not found"))
+            return
+
+        profile_path.unlink(missing_ok=True)
+
+        if normalized == self._current_profile:
+            self._set_current_profile(self.DEFAULT_PROFILE_NAME)
+            self.parent_window.on_clear_widgets(None)
+
+        self._save_profile_order(self._list_profiles())
+        self.parent_window.show_notification(_("Profile deleted"))
 
     def _show_profile_manager(self, widget_factory: "WidgetFactory") -> None:
         if self._open_external_profile_manager_window(widget_factory):
             return
 
-        dialog = Gtk.Dialog(title=_("Profile Manager"), transient_for=self.parent_window)
+        try:
+            dialog = Gtk.Dialog(title=_("Profile Manager"), transient_for=self.parent_window)
+            dialog.set_modal(True)
+            dialog.set_default_size(520, 420)
+            dialog.add_button(_("Close"), Gtk.ResponseType.CLOSE)
+
+            content = dialog.get_content_area()
+            profile_content = self._build_profile_manager_content(widget_factory)
+            content.append(profile_content)
+
+            def on_dialog_close(_dialog, _response_id):
+                dialog.destroy()
+
+            dialog.connect("response", on_dialog_close)
+            dialog.show()
+        except Exception as exc:
+            logger.error("Failed to open profile manager dialog: %s", exc)
+            self.parent_window.show_notification(_("Failed to open Profile Manager"))
+
+    def _show_create_profile_dialog(
+        self, widget_factory: "WidgetFactory", on_done: Callable[[], None] | None = None
+    ) -> None:
+        dialog = Gtk.Dialog(title=_("Create new profile"), transient_for=self.parent_window)
         dialog.set_modal(True)
-        dialog.set_default_size(360, 260)
-        dialog.add_button(_("Close"), Gtk.ResponseType.CLOSE)
+        dialog.set_default_size(320, 120)
+        dialog.add_button(_("Cancel"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_("Create"), Gtk.ResponseType.OK)
 
         content = dialog.get_content_area()
-        profile_content = self._build_profile_manager_content(widget_factory)
-        content.append(profile_content)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_("New profile name"))
+        entry.set_margin_top(12)
+        entry.set_margin_bottom(12)
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        content.append(entry)
 
-        def on_dialog_close(_dialog, _response_id):
+        def on_response(_dialog: Gtk.Dialog, response_id: int) -> None:
+            if response_id == Gtk.ResponseType.OK:
+                self._create_profile(entry.get_text(), widget_factory)
+                if on_done:
+                    on_done()
             dialog.destroy()
 
-        dialog.connect("response", on_dialog_close)
+        dialog.connect("response", on_response)
         dialog.show()
+
+    def _show_profile_context_menu(
+        self,
+        tile: Gtk.Box,
+        profile_name: str,
+        refresh_tiles: Callable[[], None],
+    ) -> None:
+        popover = Gtk.Popover()
+        popover.set_has_arrow(True)
+        popover.set_parent(tile)
+
+        menu_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        menu_box.set_margin_top(8)
+        menu_box.set_margin_bottom(8)
+        menu_box.set_margin_start(8)
+        menu_box.set_margin_end(8)
+
+        change_button = Gtk.Button(label=_("Change"))
+        change_button.add_css_class("flat")
+        change_button.connect(
+            "clicked",
+            lambda _btn: (
+                self._update_profile(profile_name),
+                refresh_tiles(),
+                popover.popdown(),
+            ),
+        )
+        menu_box.append(change_button)
+
+        delete_button = Gtk.Button(label=_("Delete"))
+        delete_button.add_css_class("flat")
+        delete_button.add_css_class("destructive-action")
+        delete_button.connect(
+            "clicked",
+            lambda _btn: (
+                self._delete_profile(profile_name),
+                refresh_tiles(),
+                popover.popdown(),
+            ),
+        )
+        menu_box.append(delete_button)
+
+        popover.set_child(menu_box)
+        popover.popup()
+
+    def _create_profile_tile(
+        self,
+        profile_name: str,
+        refresh_tiles: Callable[[], None],
+    ) -> Gtk.Box:
+        tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        tile.set_halign(Gtk.Align.CENTER)
+        tile.set_valign(Gtk.Align.START)
+        tile.add_css_class("profile-tile")
+
+        icon_button = Gtk.Button()
+        icon_button.set_size_request(88, 88)
+        icon_button.set_focus_on_click(False)
+        icon_button.add_css_class("circular")
+        if profile_name == self._current_profile:
+            icon_button.add_css_class("suggested-action")
+
+        letter = Gtk.Label(label=profile_name[:1].upper())
+        letter.add_css_class("title-2")
+        icon_button.set_child(letter)
+        icon_button.connect(
+            "clicked", lambda _btn: (self._switch_profile(profile_name, widget_factory), refresh_tiles())
+        )
+        tile.append(icon_button)
+
+        name_label = Gtk.Label(label=profile_name)
+        name_label.set_max_width_chars(14)
+        name_label.set_ellipsize(Pango.EllipsizeMode.END)
+        tile.append(name_label)
+
+        right_click = Gtk.GestureClick()
+        right_click.set_button(3)
+        right_click.connect(
+            "pressed",
+            lambda _gesture, _n_press, _x, _y: self._show_profile_context_menu(
+                tile, profile_name, refresh_tiles
+            ),
+        )
+        tile.add_controller(right_click)
+
+        press_time = {"value": 0.0}
+
+        hold_click = Gtk.GestureClick()
+        hold_click.set_button(1)
+        hold_click.connect(
+            "pressed", lambda *_args: press_time.__setitem__("value", time.monotonic())
+        )
+        hold_click.connect("released", lambda *_args: press_time.__setitem__("value", 0.0))
+        icon_button.add_controller(hold_click)
+
+        drag_source = Gtk.DragSource()
+        drag_source.set_actions(Gdk.DragAction.MOVE)
+        drag_source.connect(
+            "prepare",
+            lambda _source, _x, _y: Gdk.ContentProvider.new_for_value(profile_name)
+            if (time.monotonic() - press_time["value"]) >= 0.35
+            else None,
+        )
+        icon_button.add_controller(drag_source)
+
+        drop_target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+
+        def on_drop(_target, value, _x, _y):
+            source_name = value if isinstance(value, str) else None
+            if not source_name or source_name == profile_name:
+                return False
+            ordered = self._list_profiles()
+            if source_name not in ordered or profile_name not in ordered:
+                return False
+            ordered.remove(source_name)
+            insert_index = ordered.index(profile_name)
+            ordered.insert(insert_index, source_name)
+            self._save_profile_order(ordered)
+            refresh_tiles()
+            return True
+
+        drop_target.connect("drop", on_drop)
+        tile.add_controller(drop_target)
+        return tile
 
     def _build_profile_manager_content(self, widget_factory: "WidgetFactory") -> Gtk.Box:
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -635,80 +862,56 @@ class ContextMenuManager:
         content.set_margin_start(12)
         content.set_margin_end(12)
 
-        current_label = Gtk.Label(label=_("Current profile"), xalign=0)
-        content.append(current_label)
-
-        profile_names = self._list_profiles()
-        profile_dropdown = Gtk.DropDown()
-        self._refresh_profile_dropdown(
-            profile_dropdown, profile_names, self._current_profile
+        hint = Gtk.Label(
+            label=_("Click profile to apply. Right click for Change/Delete. Hold then drag to reorder."),
+            xalign=0,
         )
-        content.append(profile_dropdown)
+        hint.add_css_class("dim-label")
+        content.append(hint)
 
-        switch_button = Gtk.Button(label=_("Switch profile"))
-        switch_button.connect(
-            "clicked",
-            lambda _btn: self._switch_profile(
-                self._get_selected_profile_name(profile_dropdown), widget_factory
-            ),
-        )
-        content.append(switch_button)
+        profile_grid = Gtk.FlowBox()
+        profile_grid.set_selection_mode(Gtk.SelectionMode.NONE)
+        profile_grid.set_orientation(Gtk.Orientation.HORIZONTAL)
+        profile_grid.set_column_spacing(12)
+        profile_grid.set_row_spacing(12)
+        profile_grid.set_min_children_per_line(4)
+        profile_grid.set_max_children_per_line(6)
+        profile_grid.set_homogeneous(True)
 
-        update_button = Gtk.Button(label=_("Update selected profile"))
-        update_button.connect(
-            "clicked",
-            lambda _btn: self._update_profile(
-                self._get_selected_profile_name(profile_dropdown)
-            ),
-        )
-        content.append(update_button)
+        def refresh_tiles() -> None:
+            child = profile_grid.get_first_child()
+            while child:
+                next_child = child.get_next_sibling()
+                profile_grid.remove(child)
+                child = next_child
 
-        new_profile_label = Gtk.Label(label=_("Create new profile"), xalign=0)
-        content.append(new_profile_label)
+            for profile_name in self._list_profiles():
+                profile_grid.append(
+                    self._create_profile_tile(
+                        profile_name, widget_factory, refresh_tiles
+                    )
+                )
 
-        new_profile_entry = Gtk.Entry()
-        new_profile_entry.set_placeholder_text(_("New profile name"))
-        content.append(new_profile_entry)
+            add_tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            add_tile.set_halign(Gtk.Align.CENTER)
+            add_tile.set_valign(Gtk.Align.START)
 
-        create_button = Gtk.Button(label=_("Create profile from current"))
-        create_button.connect(
-            "clicked",
-            lambda _btn: self._create_profile(
-                new_profile_entry.get_text(), widget_factory
-            ),
-        )
-        content.append(create_button)
-
-        rename_label = Gtk.Label(label=_("Rename profile"), xalign=0)
-        content.append(rename_label)
-
-        rename_entry = Gtk.Entry()
-        rename_entry.set_placeholder_text(_("New name for selected profile"))
-        content.append(rename_entry)
-
-        rename_button = Gtk.Button(label=_("Rename selected profile"))
-        rename_button.connect(
-            "clicked",
-            lambda _btn: self._rename_profile(
-                self._get_selected_profile_name(profile_dropdown),
-                rename_entry.get_text(),
-            ),
-        )
-        content.append(rename_button)
-
-        def refresh_profiles():
-            updated_profiles = self._list_profiles()
-            selected = self._current_profile
-            self._refresh_profile_dropdown(
-                profile_dropdown, updated_profiles, selected
+            add_button = Gtk.Button()
+            add_button.set_size_request(88, 88)
+            add_button.add_css_class("suggested-action")
+            add_button.set_icon_name("list-add-symbolic")
+            add_button.connect(
+                "clicked",
+                lambda _btn: self._show_create_profile_dialog(widget_factory, refresh_tiles),
             )
-            return False
+            add_tile.append(add_button)
 
-        update_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
-        create_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
-        rename_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
-        switch_button.connect("clicked", lambda _btn: GLib.idle_add(refresh_profiles))
+            add_label = Gtk.Label(label=_("Add profile"))
+            add_tile.append(add_label)
+            profile_grid.append(add_tile)
 
+        refresh_tiles()
+        content.append(profile_grid)
         return content
 
     def _open_external_profile_manager_window(self, widget_factory: "WidgetFactory") -> bool:
@@ -736,7 +939,6 @@ class ContextMenuManager:
                 window.set_resizable(True)
             if hasattr(window, "set_decorated"):
                 window.set_decorated(True)
-            window.set_default_size(420, 420)
 
             header_bar = Gtk.HeaderBar()
             header_bar.set_show_title_buttons(False)
@@ -764,6 +966,8 @@ class ContextMenuManager:
 
             title_handle = Gtk.WindowHandle()
             title_handle.set_child(header_bar)
+
+            window.set_default_size(420, 420)
 
             scrolled = Gtk.ScrolledWindow()
             scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
