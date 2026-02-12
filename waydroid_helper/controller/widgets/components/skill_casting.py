@@ -131,6 +131,8 @@ class SkillCasting(BaseWidget):
     CALIBRATE_CENTER_CONFIG_KEY = "skill_calibrate_center"
     RESET_CENTER_CONFIG_KEY = "skill_reset_center"
     APPLY_CENTER_CONFIG_KEY = "skill_apply_center"
+    MOVE_INTERVAL_MS_CONFIG_KEY = "skill_move_interval_ms"
+    MOVE_STEPS_CONFIG_KEY = "skill_move_steps"
     VERTICAL_SCALE_RATIO = 0.745
     SETTINGS_PANEL_AUTO_HIDE = False
 
@@ -558,6 +560,30 @@ class SkillCasting(BaseWidget):
 
     def setup_config(self) -> None:
         """设置配置项"""
+        move_interval_config = create_slider_config(
+            key=self.MOVE_INTERVAL_MS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Move Step Interval (ms)"),
+            value=20,
+            min_value=1,
+            max_value=120,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Скрорость с которой он идёт от центра к направлению курсора.",
+            ),
+        )
+        move_steps_config = create_slider_config(
+            key=self.MOVE_STEPS_CONFIG_KEY,
+            label=pgettext("Controller Widgets", "Move Steps"),
+            value=6,
+            min_value=1,
+            max_value=30,
+            step=1,
+            description=pgettext(
+                "Controller Widgets",
+                "Number of interpolation steps when moving from center to target.",
+            ),
+        )
         circle_radius_config = create_slider_config(
             key="circle_radius",
             label=pgettext("Controller Widgets", "Casting Radius"),
@@ -989,6 +1015,8 @@ class SkillCasting(BaseWidget):
             ),
         )
 
+        self.add_config_item(move_interval_config)
+        self.add_config_item(move_steps_config)
         self.add_config_item(circle_radius_config)
         self.add_config_item(cast_timing_config)
         self.add_config_item(self.cancel_button_config)
@@ -1034,6 +1062,12 @@ class SkillCasting(BaseWidget):
 
         self.add_config_change_callback("circle_radius", self._on_circle_radius_changed)
         self.add_config_change_callback("cast_timing", self._on_cast_timing_changed)
+        self.add_config_change_callback(
+            self.MOVE_INTERVAL_MS_CONFIG_KEY, self._on_move_interval_changed
+        )
+        self.add_config_change_callback(
+            self.MOVE_STEPS_CONFIG_KEY, self._on_move_steps_changed
+        )
         self.add_config_change_callback(
             "enable_cancel_button", self._on_cancel_button_config_changed
         )
@@ -1118,6 +1152,11 @@ class SkillCasting(BaseWidget):
         ):
             self.add_config_change_callback(key, self._on_perspective_config_changed)
 
+        self._apply_move_interval_ms(
+            self.get_config_value(self.MOVE_INTERVAL_MS_CONFIG_KEY)
+        )
+        self._apply_move_steps(self.get_config_value(self.MOVE_STEPS_CONFIG_KEY))
+
         self._sync_center_inputs()
         self.get_config_manager().connect(
             "confirmed",
@@ -1128,6 +1167,25 @@ class SkillCasting(BaseWidget):
                 self._emit_overlay_event("refresh"),
             ),
         )
+
+    def _apply_move_interval_ms(self, value: object) -> None:
+        try:
+            interval_ms = max(1.0, float(value))
+            self._move_interval = interval_ms / 1000.0
+        except (TypeError, ValueError):
+            pass
+
+    def _apply_move_steps(self, value: object) -> None:
+        try:
+            self._move_steps_total = max(1, int(float(value)))
+        except (TypeError, ValueError):
+            pass
+
+    def _on_move_interval_changed(self, key: str, value: float, restoring: bool) -> None:
+        self._apply_move_interval_ms(value)
+
+    def _on_move_steps_changed(self, key: str, value: float, restoring: bool) -> None:
+        self._apply_move_steps(value)
 
     def _on_circle_radius_changed(self, key: str, value: int, restoring:bool) -> None:
         """处理圆半径配置变更"""
@@ -1350,7 +1408,17 @@ class SkillCasting(BaseWidget):
                     "Adjust how the skill is cast and whether a cancel button is shown.",
                 ),
                 expanded=True,
-                extra_widgets=[radius_control],
+                extra_widgets=[
+                    build_section(
+                        pgettext("Controller Widgets", "Timings"),
+                        [
+                            self.MOVE_INTERVAL_MS_CONFIG_KEY,
+                            self.MOVE_STEPS_CONFIG_KEY,
+                        ],
+                        expanded=False,
+                    ),
+                    radius_control,
+                ],
             )
         )
 
